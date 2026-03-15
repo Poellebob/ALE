@@ -1,165 +1,156 @@
+// src/lib/snippetExpansion.ts
+//
+// Provides a CodeMirror keymap extension that handles Tab-based snippet
+// expansion and placeholder navigation.
+//
+// Tab key priority order:
+//   1. If $N placeholders exist in the document → jump to the next one
+//   2. If the current line is an exact trigger → expand it
+//   3. Consume the event (no browser focus jump)
+//
+// See docs/07-snippets.md for design rationale.
+
 import { keymap, EditorView } from '@codemirror/view';
-import { EditorState, type Transaction } from '@codemirror/state';
+import { EditorState } from '@codemirror/state';
 import { snippets } from './snippets';
 
-interface TabStop {
-  pos: number;
-  index: number;
-}
+// ---------------------------------------------------------------------------
+// Trigger detection
+// ---------------------------------------------------------------------------
 
-function findTrigger(state: EditorState): { trigger: string; start: number } | null {
+/**
+ * Returns the trigger and its line start if the cursor is at the end of a
+ * line whose entire text equals a known snippet trigger. Returns null otherwise.
+ */
+function findTrigger(
+  state: EditorState
+): { trigger: string; lineFrom: number } | null {
   const pos = state.selection.main.head;
   const line = state.doc.lineAt(pos);
-  const text = line.text.slice(0, pos - line.from); // Text from line start to cursor
+
+  // Only fire when cursor is at the very end of the line (no trailing chars)
+  if (pos !== line.from + line.length) return null;
 
   for (const snippet of snippets) {
-    // Check if the snippet trigger exists at the end of the current line's text before the cursor
-    const triggerRegex = new RegExp(`(^|\\s)${snippet.trigger}$`);
-    const match = text.match(triggerRegex);
-
-    if (match) {
-      const start = line.from + text.lastIndexOf(snippet.trigger);
-      return { trigger: snippet.trigger, start: start };
+    if (line.text === snippet.trigger) {
+      return { trigger: snippet.trigger, lineFrom: line.from };
     }
   }
-  
   return null;
 }
 
-function expandSnippet(view: EditorView, triggerInfo: { trigger: string; start: number }): boolean {
-  const snippet = snippets.find(s => s.trigger === triggerInfo.trigger);
+// ---------------------------------------------------------------------------
+// Expansion
+// ---------------------------------------------------------------------------
+
+/**
+ * Replaces the trigger line with the expanded text, positioning the cursor at
+ * the $0 tab stop (or end of text if no $0 is present).
+ */
+function expandSnippet(
+  view: EditorView,
+  triggerInfo: { trigger: string; lineFrom: number }
+): boolean {
+  const snippet = snippets.find((s) => s.trigger === triggerInfo.trigger);
   if (!snippet) return false;
-  
-  const expansion = snippet.expansion;
-  
-  const tabStops: TabStop[] = [];
+
+  // Parse the expansion string into plain text + tab stop positions
+  const tabStops: { pos: number; index: number }[] = [];
   let expandedText = '';
-  
-  for (let i = 0; i < expansion.length; i++) {
-    const char = expansion[i];
-    if (char === '$' && i + 1 < expansion.length) {
-      const nextChar = expansion[i + 1];
-      if (nextChar >= '0' && nextChar <= '9') {
-        const num = parseInt(nextChar, 10);
-        
-        if (num === 0) {
-          tabStops.push({ pos: expandedText.length, index: 0 });
-        } else {
-          tabStops.push({ pos: expandedText.length, index: num });
-        }
-        
-        i += 1;
-        continue;
-      }
+
+  for (let i = 0; i < snippet.expansion.length; i++) {
+    if (
+      snippet.expansion[i] === '$' &&
+      i + 1 < snippet.expansion.length &&
+      snippet.expansion[i + 1] >= '0' &&
+      snippet.expansion[i + 1] <= '9'
+    ) {
+      tabStops.push({
+        pos: expandedText.length,
+        index: parseInt(snippet.expansion[i + 1], 10),
+      });
+      i += 1; // skip the digit
+      continue;
     }
-    expandedText += char;
+    expandedText += snippet.expansion[i];
   }
-  
+
   tabStops.sort((a, b) => a.index - b.index);
-  
-  const from = triggerInfo.start;
-  const line = view.state.doc.lineAt(from);
-  const to = line.from + line.length;
-  
-  let cursorPos = from;
-  
-  const firstTabStop = tabStops.find(t => t.index === 0);
-  if (firstTabStop) {
-    cursorPos = from + firstTabStop.pos;
-  }
-  
+
+  // $1 is the first edit point. $0 is where the cursor ends up after all jumps.
+  const firstStop = tabStops.find((t) => t.index === 1) ?? tabStops.find((t) => t.index === 0);
+  const cursorPos = triggerInfo.lineFrom + (firstStop?.pos ?? expandedText.length);
+
+  const line = view.state.doc.lineAt(triggerInfo.lineFrom);
+
   view.dispatch({
-    changes: { from, to, insert: expandedText },
+    changes: {
+      from: triggerInfo.lineFrom,
+      to: line.from + line.length,
+      insert: expandedText,
+    },
     selection: { anchor: cursorPos },
-    userEvent: 'input'
+    userEvent: 'input.snippet',
   });
-  
+
   return true;
 }
 
-function findNextTabStop(view: EditorView): boolean {
+// ---------------------------------------------------------------------------
+// Placeholder navigation
+// ---------------------------------------------------------------------------
+
+/** Returns true if the document contains any un-visited $N (N ≥ 1) markers. */
+function hasPlaceholders(state: EditorState): boolean {
+  return /\$[1-9]/.test(state.doc.toString());
+}
+
+/**
+ * Moves the cursor to the next $N placeholder after the current position.
+ * Wraps around to the beginning of the document if nothing is found ahead.
+ */
+function jumpToNextPlaceholder(view: EditorView): boolean {
   const pos = view.state.selection.main.head;
   const doc = view.state.doc.toString();
-  
-  let bestPos = -1;
-  let dollarPos = doc.indexOf('$', pos);
-  
-  while (dollarPos !== -1) {
-    if (dollarPos + 1 < doc.length) {
-      const nextChar = doc[dollarPos + 1];
-      if (nextChar >= '1' && nextChar <= '9') {
-        if (bestPos === -1 || dollarPos < bestPos) {
-          bestPos = dollarPos;
-        }
-      }
+
+  // Search forward from current position
+  for (let i = pos; i < doc.length - 1; i++) {
+    if (doc[i] === '$' && doc[i + 1] >= '1' && doc[i + 1] <= '9') {
+      view.dispatch({ selection: { anchor: i }, userEvent: 'move.placeholder' });
+      return true;
     }
-    dollarPos = doc.indexOf('$', dollarPos + 1);
   }
-  
-  if (bestPos !== -1) {
-    view.dispatch({
-      selection: { anchor: bestPos },
-      userEvent: 'move'
-    });
-    return true;
+
+  // Wrap: search from beginning
+  for (let i = 0; i < pos; i++) {
+    if (doc[i] === '$' && doc[i + 1] >= '1' && doc[i + 1] <= '9') {
+      view.dispatch({ selection: { anchor: i }, userEvent: 'move.placeholder' });
+      return true;
+    }
   }
-  
+
   return false;
 }
 
-function removeRemainingDollarPlaceholders(view: EditorView): boolean {
-  const pos = view.state.selection.main.head;
-  const doc = view.state.doc.toString();
-  
-  let dollarPos = doc.indexOf('$', pos);
-  
-  while (dollarPos !== -1) {
-    if (dollarPos + 1 < doc.length) {
-      const nextChar = doc[dollarPos + 1];
-      if (nextChar >= '0' && nextChar <= '9') {
-        const endPos = dollarPos + 2;
-        
-        view.dispatch({
-          changes: { from: dollarPos, to: endPos, insert: '' },
-          userEvent: 'input'
-        });
-        
-        return true;
-      }
-    }
-    dollarPos = doc.indexOf('$', dollarPos + 1);
-  }
-  
-  return false;
-}
-
-function hasUnprocessedPlaceholders(state: EditorState): boolean {
-  const doc = state.doc.toString();
-  return /\$[1-9]/.test(doc);
-}
+// ---------------------------------------------------------------------------
+// Tab handler
+// ---------------------------------------------------------------------------
 
 function handleTab(view: EditorView): boolean {
-  const state = view.state;
-  const hasPlaceholder = hasUnprocessedPlaceholders(state);
-  
-  if (hasPlaceholder) {
-    const found = findNextTabStop(view);
-    if (found) return true;
-    
-    const removed = removeRemainingDollarPlaceholders(view);
-    if (removed) return true;
-    
+  if (hasPlaceholders(view.state)) {
+    jumpToNextPlaceholder(view);
     return true;
   }
-  
-  const triggerInfo = findTrigger(state);
+
+  const triggerInfo = findTrigger(view.state);
   if (triggerInfo) {
     return expandSnippet(view, triggerInfo);
   }
-  
+
+  // Consume Tab so it does not shift browser focus to the next element
   return true;
 }
 
 export const snippetKeymap = keymap.of([
-  { key: 'Tab', run: handleTab, shift: handleTab }
+  { key: 'Tab', run: handleTab },
 ]);

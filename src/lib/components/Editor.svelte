@@ -1,219 +1,200 @@
+<!--
+  src/lib/components/Editor.svelte
+
+  Mounts a full CodeMirror 6 instance and wires it to the store and
+  decoration system. Exposes insertText / undo / redo as imperative methods
+  so the parent page can call them from toolbar actions.
+
+  See docs/05-editor.md for the full extension stack.
+-->
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { get } from 'svelte/store';
-  import { EditorView, keymap, lineNumbers, highlightActiveLineGutter, highlightSpecialChars, drawSelection, highlightActiveLine } from '@codemirror/view';
-  import { EditorState, Compartment } from '@codemirror/state';
-  import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
-  import { syntaxHighlighting, HighlightStyle, StreamLanguage } from '@codemirror/language';
+  import {
+    EditorView,
+    keymap,
+    lineNumbers,
+    highlightActiveLineGutter,
+    highlightSpecialChars,
+    drawSelection,
+    highlightActiveLine,
+  } from '@codemirror/view';
+  import { EditorState } from '@codemirror/state';
+  import {
+    defaultKeymap,
+    history,
+    historyKeymap,
+    undo as cmUndo,
+    redo as cmRedo,
+  } from '@codemirror/commands';
+  import {
+    syntaxHighlighting,
+    HighlightStyle,
+    StreamLanguage,
+  } from '@codemirror/language';
   import { tags as t } from '@lezer/highlight';
-  import { snippetKeymap } from '../snippetExpansion';
-  import { createDecorationPlugin, setRefreshFn, decorationKeymap, setRenderSettings } from '../latexDecorations';
-  import { settingsStore, type Settings } from '$lib/stores';
 
-  export let content: string = '';
-  export let onchange: ((content: string) => void) | undefined = undefined;
+  import { snippetKeymap } from '$lib/snippetExpansion';
+  import { itemEnterKeymap } from '$lib/itemEnter';
+  import { createDecorationPlugin, setRefreshFn } from '$lib/latexDecorations';
 
-  let editorContainer: HTMLDivElement;
+  interface Props {
+    content: string;
+    onchange?: (content: string) => void;
+  }
+
+  let { content, onchange }: Props = $props();
+
+  let container: HTMLDivElement;
   let view: EditorView | null = null;
 
-  const themeCompartment = new Compartment();
-  const lineNumCompartment = new Compartment();
-  const wordWrapCompartment = new Compartment();
-
-  const latexLanguage = StreamLanguage.define({
-    token(stream: any) {
-      if (stream.match(/\\(begin|end)\{enumerate\}/)) return 'keyword';
-      if (stream.match(/\\(begin|end)\{itemize\}/)) return 'keyword';
-      if (stream.match(/\\item/)) return 'keyword';
+  // -------------------------------------------------------------------------
+  // Language — minimal LaTeX stream tokenizer
+  // -------------------------------------------------------------------------
+  // StreamLanguage lets us assign CSS class names to token types without
+  // building a full Lezer grammar. The class names map onto the CSS variables
+  // defined in editor.css.
+  const latexLang = StreamLanguage.define({
+    token(stream: { match: (r: RegExp | string) => boolean; next: () => void }) {
+      if (stream.match(/\\(begin|end)\{(enumerate|itemize|document|figure|table|equation|align)\}/))
+        return 'keyword';
+      if (stream.match(/\\(item|maketitle|tableofcontents|newpage|clearpage)\b/))
+        return 'keyword';
       if (stream.match(/\$\$/)) return 'string';
       if (stream.match(/\$/)) return 'string';
+      if (stream.match(/%[^\n]*/)) return 'comment';
       if (stream.match(/\\[a-zA-Z]+/)) return 'attributeName';
+      if (stream.match(/\{|\}/)) return 'bracket';
       stream.next();
       return null;
-    }
+    },
   });
 
   const latexHighlight = HighlightStyle.define([
-    { tag: t.keyword, color: '#708' },
-    { tag: t.string, color: '#219' },
+    { tag: t.keyword,       class: 'cm-keyword' },
+    { tag: t.string,        class: 'cm-string' },
+    { tag: t.comment,       class: 'cm-comment' },
+    { tag: t.attributeName, class: 'cm-attributeName' },
   ]);
 
-  function getTheme(settings: Settings) {
-    return EditorView.theme({
-      '&': { 
-        height: '100%', 
-        fontSize: `${settings.fontSize}px`, 
-        fontFamily: `"${settings.fontFamily}", monospace`,
-        backgroundColor: 'var(--editor-background)',
-        color: 'var(--editor-text)'
-      },
-      '.cm-scroller': { overflow: 'auto' },
-      '.cm-content': { caretColor: 'var(--editor-cursor)' },
-      '.cm-list-item': { marginRight: '4px' },
-      '.cm-math-inline': { margin: '0 2px', verticalAlign: 'middle' },
-      '.cm-math-display': { display: 'block', margin: '8px 0', textAlign: 'center' },
-      '.cm-bold': { fontWeight: 'bold' },
-      '.cm-italic': { fontStyle: 'italic' },
-      '.cm-heading': { fontWeight: 'bold' },
-      '.cm-section': { fontSize: '1.4em', marginTop: '1em' },
-      '.cm-subsection': { fontSize: '1.2em', marginTop: '0.8em' },
-      '.cm-subsubsection': { fontSize: '1.1em', marginTop: '0.6em' },
-      '&.cm-focused .cm-cursor': { borderLeftColor: 'var(--editor-cursor)' },
-      '&.cm-focused .cm-selectionBackground, ::selection': { backgroundColor: 'var(--editor-selection)' },
-      '.cm-gutters': { 
-        backgroundColor: 'var(--editor-background)', 
-        color: 'var(--editor-text)', 
-        opacity: 0.7,
-        borderRight: '1px solid var(--secondary)' 
-      },
-      '.cm-activeLineGutter': { backgroundColor: 'var(--secondary)' },
-      '.cm-activeLine': { backgroundColor: 'var(--secondary)' }
-    });
-  }
+  // -------------------------------------------------------------------------
+  // Structural theme (layout / sizing, no colours — those are in editor.css)
+  // -------------------------------------------------------------------------
+  const structuralTheme = EditorView.theme({
+    '&': {
+      height: '100%',
+    },
+    '.cm-scroller': {
+      overflow: 'auto',
+      // font-family set in editor.css via .cm-scroller
+    },
+  });
 
-  let unsubSettings: (() => void) | null = null;
-
+  // -------------------------------------------------------------------------
+  // Mount
+  // -------------------------------------------------------------------------
   onMount(() => {
-    const settings = get(settingsStore);
-    
-    setRenderSettings(settings.renderMath, settings.renderFormatting, settings.renderHeadings);
-
-    const startState = EditorState.create({
+    const state = EditorState.create({
       doc: content,
       extensions: [
-        themeCompartment.of(getTheme(settings)),
-        lineNumCompartment.of(settings.lineNumbers ? lineNumbers() : []),
-        wordWrapCompartment.of(settings.wordWrap ? EditorView.lineWrapping : []),
+        // Core UX
+        lineNumbers(),
         highlightActiveLineGutter(),
         highlightSpecialChars(),
-        history(),
         drawSelection(),
         highlightActiveLine(),
+        history(),
+
+        // Keymaps (priority order: snippets → item-enter → default)
         snippetKeymap,
-        decorationKeymap,
+        itemEnterKeymap,
         keymap.of([...defaultKeymap, ...historyKeymap]),
-        latexLanguage,
+
+        // Language & highlighting
+        latexLang,
         syntaxHighlighting(latexHighlight),
+
+        // Decoration widgets
         createDecorationPlugin(),
+
+        // Structural theme
+        structuralTheme,
+
+        // Change listener → propagate to fileStore via onchange prop
         EditorView.updateListener.of((update) => {
           if (update.docChanged && onchange) {
             onchange(update.state.doc.toString());
           }
-        })
-      ]
+        }),
+      ],
     });
 
-    view = new EditorView({ state: startState, parent: editorContainer });
-    
+    view = new EditorView({ state, parent: container });
+
+    // Give the decoration module a handle to force a redraw when raw mode
+    // is toggled — dispatching an empty effects transaction is the
+    // idiomatic way to trigger the ViewPlugin update() hook.
     setRefreshFn(() => {
-      if (view) {
-        view.dispatch({ effects: [] });
-      }
+      view?.dispatch({ effects: [] });
     });
+  });
 
-    unsubSettings = settingsStore.subscribe((settings) => {
-      if (!view) return;
-      
-      setRenderSettings(settings.renderMath, settings.renderFormatting, settings.renderHeadings);
-      
+  onDestroy(() => {
+    view?.destroy();
+  });
+
+  // -------------------------------------------------------------------------
+  // Content sync: when the parent loads a new file, replace the document
+  // without creating an undo history entry.
+  // -------------------------------------------------------------------------
+  $effect(() => {
+    if (!view) return;
+    const current = view.state.doc.toString();
+    if (current !== content) {
       view.dispatch({
-        effects: [
-          themeCompartment.reconfigure(getTheme(settings)),
-          lineNumCompartment.reconfigure(settings.lineNumbers ? lineNumbers() : []),
-          wordWrapCompartment.reconfigure(settings.wordWrap ? EditorView.lineWrapping : [])
-        ]
+        changes: { from: 0, to: current.length, insert: content },
+        // Not a user event — avoids polluting undo history on file open
       });
-    });
+    }
   });
 
-  onDestroy(() => { 
-    view?.destroy(); 
-    if (unsubSettings) unsubSettings();
-  });
+  // -------------------------------------------------------------------------
+  // Public API (called via bind:this from +page.svelte)
+  // -------------------------------------------------------------------------
 
-  export function setContent(newContent: string) {
-    if (view) {
-      const currentContent = view.state.doc.toString();
-      if (currentContent !== newContent) {
-        view.dispatch({ changes: { from: 0, to: currentContent.length, insert: newContent } });
-      }
-    }
-  }
-
-  export function getContent(): string {
-    return view ? view.state.doc.toString() : content;
-  }
-
-  export function getSelectedText(): string {
-    if (!view) return '';
-    const selection = view.state.selection.main;
-    return view.state.sliceDoc(selection.from, selection.to);
-  }
-
-  export function deleteSelectedText() {
+  /** Insert text at the current cursor position. */
+  export function insertText(text: string) {
     if (!view) return;
-    const selection = view.state.selection.main;
-    if (!selection.empty) {
-      view.dispatch({ changes: { from: selection.from, to: selection.to, insert: '' } });
-    }
-  }
-
-  export function insertSnippet(expansion: string) {
-    if (!view) return;
-
-    const tabStops: { pos: number; index: number }[] = [];
-    let expandedText = '';
-    let cursorAnchor: number | undefined;
-
-    for (let i = 0; i < expansion.length; i++) {
-      const char = expansion[i];
-      if (char === '$' && i + 1 < expansion.length) {
-        const nextChar = expansion[i + 1];
-        if (nextChar >= '0' && nextChar <= '9') {
-          const num = parseInt(nextChar, 10);
-          
-          if (num === 0) {
-            cursorAnchor = expandedText.length;
-          }
-          tabStops.push({ pos: expandedText.length, index: num });
-          i += 1;
-          continue;
-        }
-      }
-      expandedText += char;
-    }
-
-    const currentSelection = view.state.selection.main;
-    const from = currentSelection.from;
-    const to = currentSelection.to;
-
-    let changes = { from: from, to: to, insert: expandedText };
-    let selectionAnchor = cursorAnchor !== undefined ? from + cursorAnchor : from + expandedText.length;
-
+    const pos = view.state.selection.main.head;
     view.dispatch({
-      changes: changes,
-      selection: { anchor: selectionAnchor },
-      userEvent: 'input.insertSnippet'
+      changes: { from: pos, to: pos, insert: text },
+      selection: { anchor: pos + text.length },
+      userEvent: 'input.insert',
     });
+    view.focus();
   }
 
+  /** Undo the last edit. Uses the proper CodeMirror command — not a fake event. */
   export function undo() {
-    if (view) {
-      view.dispatch({ userEvent: 'undo' });
-    }
+    if (view) cmUndo(view);
   }
 
+  /** Redo the last undone edit. */
   export function redo() {
-    if (view) {
-      view.dispatch({ userEvent: 'redo' });
-    }
+    if (view) cmRedo(view);
   }
 </script>
 
-<div class="editor-wrapper" bind:this={editorContainer}></div>
+<div class="editor-shell" bind:this={container}></div>
 
 <style>
-  .editor-wrapper { width: 100%; height: 100%; overflow: hidden; }
-  .editor-wrapper :global(.cm-editor) { height: 100%; }
-  .editor-wrapper :global(.cm-scroller) { font-family: 'JetBrains Mono', 'Fira Code', monospace; }
+  .editor-shell {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+  }
+
+  /* Make the CodeMirror root fill the container */
+  .editor-shell :global(.cm-editor) {
+    height: 100%;
+  }
 </style>

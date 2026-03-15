@@ -1,116 +1,107 @@
+<!--
+  src/routes/+page.svelte
+
+  Application root. Coordinates:
+    - File operations (new / open / save / save-as) via Tauri invoke + dialog
+    - Build trigger and log streaming via build-log Tauri events
+    - Global keyboard shortcut handling
+    - Theme and raw-mode toggles
+    - Layout: TabBar → split panes (Editor | PdfViewer) → LogPanel → StatusBar
+
+  See docs/03-page.md for the full wiring diagram.
+-->
 <script lang="ts">
   import { Splitpanes, Pane } from 'svelte-splitpanes';
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
   import { open, save } from '@tauri-apps/plugin-dialog';
   import { onMount, onDestroy } from 'svelte';
-  import { get } from 'svelte/store';
-  import Editor from '$lib/components/Editor.svelte';
-  import PdfViewer from '$lib/components/PdfViewer.svelte';
-  import TabBar from '$lib/components/TabBar.svelte';
-  import SettingsModal from '$lib/components/SettingsModal.svelte';
-  import { fileStore, buildStore, settingsStore, type BuildLogEntry, type Settings } from '$lib/stores';
-  import { themes } from '$lib/themes';
+
+  import { Editor, PdfViewer, TabBar, LogPanel, StatusBar } from '$lib/components';
+  import { fileStore, buildStore, themeStore } from '$lib/stores';
+  import type { BuildLogEntry } from '$lib/stores';
   import type { Tab } from '$lib/tabs/definitions';
   import { snippets } from '$lib/snippets';
   import { toggleRawMode, isRawMode, refreshDecorations } from '$lib/latexDecorations';
 
-  let themeCss = $state('');
-  let darkMatcher: MediaQueryList | undefined;
+  // ── Component refs ─────────────────────────────────────────────────
+  let editorRef: Editor;
 
-  function updateTheme(settingsValue: Settings) {
-    let themeName = settingsValue.theme;
-    if (themeName === 'system') {
-      themeName = darkMatcher?.matches ? 'dark' : 'light';
-    }
+  // ── Local reactive state ───────────────────────────────────────────
+  let showLog  = $state(false);
+  let rawMode  = $state(false);
 
-    const theme = themes[themeName];
-    if (theme) {
-      const css = `
-:root {
-  --primary: ${theme.colors.primary};
-  --secondary: ${theme.colors.secondary};
-  --accent: ${theme.colors.accent};
-  --background: ${theme.colors.background};
-  --text: ${theme.colors.text};
-  --editor-background: ${theme.colors.editor.background};
-  --editor-text: ${theme.colors.editor.text};
-  --editor-selection: ${theme.colors.editor.selection};
-  --editor-cursor: ${theme.colors.editor.cursor};
-}
-      `;
-      themeCss = css;
-    }
-  }
+  // Mirror store values to $state so Svelte 5 templates can react to them
+  let fileState  = $state({ path: null as string | null, content: '', dirty: false });
+  let buildState = $state({
+    status: 'idle' as string,
+    logs: [] as BuildLogEntry[],
+    pdfPath: null as string | null,
+    error: null as string | null,
+  });
+  let currentTheme = $state('light');
 
-  settingsStore.subscribe(updateTheme);
+  // ── Cursor position for StatusBar ─────────────────────────────────
+  let cursorLine = $state(1);
+  let cursorCol  = $state(1);
 
-  let editorComponent: Editor;
-  let showLog = $state(false);
-  let logContainer: HTMLDivElement;
-  let rawMode = $state(false);
-  let showSettings = $state(false);
+  // ── Store subscriptions ────────────────────────────────────────────
+  const unsubFile  = fileStore.subscribe((s) => { fileState = s; });
+  const unsubBuild = buildStore.subscribe((s) => { buildState = s; });
+  const unsubTheme = themeStore.subscribe((t) => { currentTheme = t; });
 
-  let fileState = $derived($fileStore);
-  let buildState = $derived($buildStore);
+  // ── Tauri event listener cleanup ───────────────────────────────────
+  let unlistenBuildLog: (() => void) | null = null;
 
-  let unlisten: (() => void) | null = null;
-  let themeUnsub: (() => void) | null = null;
-
+  // ─────────────────────────────────────────────────────────────────
   onMount(async () => {
-    unlisten = await listen<{ line: string; stream: string }>('build-log', (event) => {
-      buildStore.addLog(event.payload.line, event.payload.stream as 'stdout' | 'stderr');
-    });
+    // Stream build log lines into the store
+    unlistenBuildLog = await listen<{ line: string; stream: string }>(
+      'build-log',
+      (event) => {
+        buildStore.addLog(
+          event.payload.line,
+          event.payload.stream as 'stdout' | 'stderr'
+        );
+      }
+    );
 
-    darkMatcher = window.matchMedia('(prefers-color-scheme: dark)');
-    const onThemeChange = () => updateTheme(get(settingsStore));
-    darkMatcher.addEventListener('change', onThemeChange);
-    
-    themeUnsub = () => {
-      darkMatcher?.removeEventListener('change', onThemeChange);
-    };
-
-    updateTheme(get(settingsStore));
-    window.addEventListener('keydown', handleKeydown);
+    window.addEventListener('keydown', handleGlobalKeydown);
   });
 
   onDestroy(() => {
-    if (unlisten) unlisten();
-    if (themeUnsub) themeUnsub();
-    window.removeEventListener('keydown', handleKeydown);
+    unlistenBuildLog?.();
+    unsubFile();
+    unsubBuild();
+    unsubTheme();
+    window.removeEventListener('keydown', handleGlobalKeydown);
   });
 
-  function handleKeydown(e: KeyboardEvent) {
-    if (e.ctrlKey || e.metaKey) {
-      if (e.key === 's') {
+  // ─────────────────────────────────────────────────────────────────
+  // Global keyboard shortcuts
+  // ─────────────────────────────────────────────────────────────────
+  function handleGlobalKeydown(e: KeyboardEvent) {
+    const mod = e.ctrlKey || e.metaKey;
+    if (!mod) return;
+
+    switch (e.key.toLowerCase()) {
+      case 'n': e.preventDefault(); handleNew();    break;
+      case 'o': e.preventDefault(); handleOpen();   break;
+      case 's':
         e.preventDefault();
-        if (e.shiftKey) {
-          handleSaveAs();
-        } else {
-          handleSave();
-        }
-      } else if (e.key === 'b') {
+        e.shiftKey ? handleSaveAs() : handleSave();
+        break;
+      case 'b': e.preventDefault(); handleBuild();  break;
+      case 'z':
         e.preventDefault();
-        handleBuild();
-      } else if (e.key === 'n') {
-        e.preventDefault();
-        handleNew();
-      } else if (e.key === 'o') {
-        e.preventDefault();
-        handleOpen();
-      } else if (e.key === ',') {
-        e.preventDefault();
-        showSettings = true;
-      }
+        e.shiftKey ? editorRef?.redo() : editorRef?.undo();
+        break;
     }
   }
 
-  $effect(() => {
-    if (buildState.logs.length && logContainer) {
-      logContainer.scrollTop = logContainer.scrollHeight;
-    }
-  });
-
+  // ─────────────────────────────────────────────────────────────────
+  // File operations
+  // ─────────────────────────────────────────────────────────────────
   function handleNew() {
     fileStore.reset();
   }
@@ -118,284 +109,244 @@
   async function handleOpen() {
     const selected = await open({
       multiple: false,
-      filters: [{ name: 'LaTeX', extensions: ['tex'] }]
+      filters: [{ name: 'LaTeX', extensions: ['tex'] }],
     });
-    if (selected) {
-      const content = await invoke<string>('read_tex_file', { path: selected });
-      fileStore.load(selected, content);
-    }
+    if (!selected) return;
+    const content = await invoke<string>('read_tex_file', { path: selected });
+    fileStore.load(selected, content);
   }
 
   async function handleSave() {
-    let path = fileState.path;
-    if (!path) {
-      const selected = await save({
-        filters: [{ name: 'LaTeX', extensions: ['tex'] }]
-      });
-      if (!selected) return;
-      path = selected;
+    if (fileState.path) {
+      await invoke('write_tex_file', { path: fileState.path, content: fileState.content });
+      fileStore.markClean();
+    } else {
+      await handleSaveAs();
     }
-    await invoke('write_tex_file', { path, content: fileState.content });
-    fileStore.setPath(path);
   }
 
   async function handleSaveAs() {
     const selected = await save({
-      filters: [{ name: 'LaTeX', extensions: ['tex'] }]
+      filters: [{ name: 'LaTeX', extensions: ['tex'] }],
     });
     if (!selected) return;
     await invoke('write_tex_file', { path: selected, content: fileState.content });
     fileStore.setPath(selected);
   }
 
+  // ─────────────────────────────────────────────────────────────────
+  // Build
+  // ─────────────────────────────────────────────────────────────────
   async function handleBuild() {
-    if (!fileState.path) {
+    // Auto-save before building if unsaved
+    if (fileState.dirty || !fileState.path) {
       await handleSave();
-      if (!fileState.path) return;
+      if (!fileState.path) return; // user cancelled the save dialog
     }
-    
     await buildStore.triggerBuild();
+    if (!showLog) showLog = true; // open log panel on first build
   }
 
+  // ─────────────────────────────────────────────────────────────────
+  // Editor content change → fileStore
+  // ─────────────────────────────────────────────────────────────────
+  function handleContentChange(content: string) {
+    fileStore.setContent(content);
+  }
+
+  // ─────────────────────────────────────────────────────────────────
+  // Insert menu actions
+  // ─────────────────────────────────────────────────────────────────
+  function handleInsert(trigger: string) {
+    const snippet = snippets.find((s) => s.trigger === trigger);
+    if (!snippet || !editorRef) return;
+
+    // Strip tab stop markers before inserting via the menu
+    const text = snippet.expansion
+      .replace(/\$[0-9]/g, '');
+
+    editorRef.insertText(text);
+  }
+
+  // ─────────────────────────────────────────────────────────────────
+  // Raw mode + theme toggles
+  // ─────────────────────────────────────────────────────────────────
   function handleToggleRawMode() {
     rawMode = toggleRawMode();
     refreshDecorations();
   }
 
-  function handleContentChange(content: string) {
-    fileStore.setContent(content);
+  function handleToggleTheme() {
+    themeStore.toggle();
   }
 
-  function handleUndo() {
-    if (editorComponent) editorComponent.undo();
-  }
-
-  function handleRedo() {
-    if (editorComponent) editorComponent.redo();
-  }
-
-  async function handleCut() {
-    if (!editorComponent) return;
-    try {
-      const selectedText = editorComponent.getSelectedText();
-      await navigator.clipboard.writeText(selectedText);
-      editorComponent.deleteSelectedText();
-    } catch (err) {
-      console.error('Failed to cut:', err);
-    }
-  }
-
-  async function handleCopy() {
-    if (!editorComponent) return;
-    try {
-      const selectedText = editorComponent.getSelectedText();
-      await navigator.clipboard.writeText(selectedText);
-    } catch (err) {
-      console.error('Failed to copy:', err);
-    }
-  }
-
-  async function handlePaste() {
-    if (!editorComponent) return;
-    try {
-      const text = await navigator.clipboard.readText();
-      editorComponent.insertSnippet(text);
-    } catch (err) {
-      console.error('Failed to paste:', err);
-    }
-  }
-
+  // ─────────────────────────────────────────────────────────────────
+  // Reactive tab definitions
+  // (using $derived so build status label stays in sync)
+  // ─────────────────────────────────────────────────────────────────
   const tabs: Tab[] = $derived([
     {
       id: 'file',
       label: 'File',
       actions: [
-        { id: 'new', label: 'New', shortcut: 'Ctrl+N', action: handleNew },
-        { id: 'open', label: 'Open', shortcut: 'Ctrl+O', action: handleOpen },
-        { id: 'save', label: 'Save', shortcut: 'Ctrl+S', action: handleSave },
-        { id: 'saveas', label: 'Save As', shortcut: 'Ctrl+Shift+S', action: handleSaveAs }
-      ]
+        { id: 'new',    label: 'New',     shortcut: 'Ctrl+N', action: handleNew },
+        { id: 'open',   label: 'Open…',   shortcut: 'Ctrl+O', action: handleOpen },
+        { id: 'save',   label: 'Save',    shortcut: 'Ctrl+S', action: handleSave,   separator: true },
+        { id: 'saveas', label: 'Save As…',shortcut: 'Ctrl+Shift+S', action: handleSaveAs },
+      ],
     },
     {
       id: 'edit',
       label: 'Edit',
       actions: [
-        { id: 'undo', label: 'Undo', shortcut: 'Ctrl+Z', action: handleUndo },
-        { id: 'redo', label: 'Redo', shortcut: 'Ctrl+Y', action: handleRedo },
-        { id: 'cut', label: 'Cut', shortcut: 'Ctrl+X', action: handleCut },
-        { id: 'copy', label: 'Copy', shortcut: 'Ctrl+C', action: handleCopy },
-        { id: 'paste', label: 'Paste', shortcut: 'Ctrl+V', action: handlePaste }
-      ]
+        { id: 'undo',  label: 'Undo',  shortcut: 'Ctrl+Z',       action: () => editorRef?.undo() },
+        { id: 'redo',  label: 'Redo',  shortcut: 'Ctrl+Shift+Z', action: () => editorRef?.redo(), separator: true },
+        { id: 'cut',   label: 'Cut',   shortcut: 'Ctrl+X',       action: () => document.execCommand('cut') },
+        { id: 'copy',  label: 'Copy',  shortcut: 'Ctrl+C',       action: () => document.execCommand('copy') },
+        { id: 'paste', label: 'Paste', shortcut: 'Ctrl+V',       action: () => document.execCommand('paste') },
+      ],
     },
     {
       id: 'insert',
       label: 'Insert',
       actions: [
-        { id: 'section', label: 'Section', action: () => editorComponent.insertSnippet(snippets.find(s => s.trigger === 'sec')!.expansion) },
-        { id: 'subsection', label: 'Subsection', action: () => editorComponent.insertSnippet(snippets.find(s => s.trigger === 'ssec')!.expansion) },
-        { id: 'figure', label: 'Figure', action: () => editorComponent.insertSnippet(snippets.find(s => s.trigger === 'fig')!.expansion) },
-        { id: 'table', label: 'Table', action: () => editorComponent.insertSnippet(snippets.find(s => s.trigger === 'tab')!.expansion) },
-        { id: 'reference', label: 'Reference', action: () => editorComponent.insertSnippet(snippets.find(s => s.trigger === 'ref')!.expansion) },
-        { id: 'citation', label: 'Citation', action: () => editorComponent.insertSnippet(snippets.find(s => s.trigger === 'cite')!.expansion) },
-        { id: 'itemize', label: 'Itemize', action: () => editorComponent.insertSnippet(snippets.find(s => s.trigger === '-')!.expansion) },
-        { id: 'enumerate', label: 'Enumerate', action: () => editorComponent.insertSnippet(snippets.find(s => s.trigger === '1.')!.expansion) },
-        { id: 'math', label: 'Math', action: () => editorComponent.insertSnippet(snippets.find(s => s.trigger === '$$')!.expansion) }
-      ]
+        { id: 'doc',     label: 'Document scaffold', action: () => handleInsert('doc') },
+        { id: 'sec',     label: 'Section',    action: () => handleInsert('sec'),  separator: true },
+        { id: 'ssec',    label: 'Subsection', action: () => handleInsert('ssec') },
+        { id: 'sssec',   label: 'Subsubsection', action: () => handleInsert('sssec') },
+        { id: 'fig',     label: 'Figure',     action: () => handleInsert('fig'),  separator: true },
+        { id: 'tab',     label: 'Table',      action: () => handleInsert('tab') },
+        { id: 'itemize', label: 'Bullet list',    action: () => handleInsert('-'),   separator: true },
+        { id: 'enum',    label: 'Numbered list',  action: () => handleInsert('1.') },
+        { id: 'math',    label: 'Display math',   action: () => handleInsert('$$'),  separator: true },
+        { id: 'eq',      label: 'Equation',       action: () => handleInsert('eq') },
+        { id: 'align',   label: 'Align',          action: () => handleInsert('align') },
+      ],
     },
     {
       id: 'build',
       label: 'Build',
       actions: [
-        { id: 'build', label: buildState.status === 'building' ? 'Building...' : 'Build PDF', shortcut: 'Ctrl+B', action: handleBuild, disabled: buildState.status === 'building' },
-        { id: 'log', label: showLog ? 'Hide Log' : 'Show Log', action: () => showLog = !showLog }
-      ]
-    }
+        {
+          id: 'build',
+          label: buildState.status === 'building' ? 'Building…' : 'Build PDF',
+          shortcut: 'Ctrl+B',
+          action: handleBuild,
+          disabled: buildState.status === 'building',
+        },
+        {
+          id: 'log',
+          label: showLog ? 'Hide Log' : 'Show Log',
+          action: () => { showLog = !showLog; },
+          separator: true,
+        },
+        {
+          id: 'reset',
+          label: 'Clear Log',
+          action: () => buildStore.reset(),
+        },
+      ],
+    },
   ]);
 </script>
 
-<svelte:head>
-  <style>{themeCss}</style>
-</svelte:head>
-
 <div class="app">
-  <TabBar {tabs} {fileState} {buildState} isRawMode={rawMode} onToggleRawMode={handleToggleRawMode} onOpenSettings={() => showSettings = true} />
+  <!-- ── Menu / title bar ───────────────────────────────────────────── -->
+  <TabBar
+    {tabs}
+    fileState={{ path: fileState.path, dirty: fileState.dirty }}
+    buildState={{ status: buildState.status }}
+    isRawMode={rawMode}
+    isDarkTheme={currentTheme === 'dark'}
+    onToggleRawMode={handleToggleRawMode}
+    onToggleTheme={handleToggleTheme}
+  />
 
-  <main class="main">
-    <Splitpanes horizontal={showLog}>
-      <Pane size={showLog ? 70 : 100}>
-        <Splitpanes>
-          <Pane size={50}>
-            <Editor 
-              bind:this={editorComponent} 
-              content={fileState.content} 
-              onchange={handleContentChange} 
+  <!-- ── Main content area ──────────────────────────────────────────── -->
+  <div class="workspace">
+    <Splitpanes horizontal={showLog} class="main-split">
+      <!-- Top pane: editor + pdf -->
+      <Pane size={showLog ? 68 : 100} minSize={30}>
+        <Splitpanes class="editor-split">
+          <Pane size={50} minSize={20}>
+            <Editor
+              bind:this={editorRef}
+              content={fileState.content}
+              onchange={handleContentChange}
             />
           </Pane>
-          <Pane size={50}>
+          <Pane size={50} minSize={20}>
             <PdfViewer pdfPath={buildState.pdfPath} />
           </Pane>
         </Splitpanes>
       </Pane>
+
+      <!-- Bottom pane: build log (conditional) -->
       {#if showLog}
-        <Pane size={30}>
-          <div class="log-panel" bind:this={logContainer}>
-            {#if buildState.logs.length === 0}
-              <div class="log-empty">No build output</div>
-            {:else}
-              {#each buildState.logs as log}
-                <div class="log-line" class:stderr={log.stream === 'stderr'}>
-                  {log.line}
-                </div>
-              {/each}
-            {/if}
-            {#if buildState.error}
-              <div class="log-error">{buildState.error}</div>
-            {/if}
-          </div>
+        <Pane size={32} minSize={10}>
+          <LogPanel
+            logs={buildState.logs}
+            error={buildState.error}
+            status={buildState.status}
+          />
         </Pane>
       {/if}
     </Splitpanes>
-  </main>
-  
-  <SettingsModal open={showSettings} onClose={() => showSettings = false} />
+  </div>
+
+  <!-- ── Status bar ─────────────────────────────────────────────────── -->
+  <StatusBar
+    line={cursorLine}
+    col={cursorCol}
+    charCount={fileState.content.length}
+    buildStatus={buildState.status}
+    {showLog}
+    onToggleLog={() => { showLog = !showLog; }}
+  />
 </div>
 
 <style>
-  :global(*) {
-    margin: 0;
-    padding: 0;
-    box-sizing: border-box;
-  }
-
-  :global(body) {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    overflow: hidden;
-    background-color: var(--background);
-    color: var(--text);
-  }
-
+  /* ── App shell ──────────────────────────────────────────────────────── */
   .app {
     display: flex;
     flex-direction: column;
     height: 100vh;
-    background: var(--background);
-  }
-
-  .main {
-    flex: 1;
+    background: var(--bg);
     overflow: hidden;
   }
 
-  .log-panel {
-    height: 100%;
-    max-height: 160px;
-    overflow: auto;
-    background: var(--editor-background);
-    color: var(--editor-text);
-    font-family: 'JetBrains Mono', 'Fira Code', monospace;
-    font-size: 12px;
-    padding: 8px;
+  .workspace {
+    flex: 1;
+    overflow: hidden;
+    min-height: 0; /* required for flex children to shrink below content */
   }
 
-  .log-empty {
-    color: #666;
-    text-align: center;
-    padding: 20px;
-  }
-
-  .log-line {
-    white-space: pre-wrap;
-    word-break: break-all;
-    line-height: 1.4;
-  }
-
-  .log-line.stderr {
-    color: #e74c3c;
-  }
-
-  .log-error {
-    margin-top: 8px;
-    padding: 8px;
-    background: #c0392b;
-    color: white;
-    border-radius: 4px;
-  }
-
+  /* ── Splitpanes overrides ───────────────────────────────────────────── */
   :global(.splitpanes__pane) {
     background: inherit;
+    overflow: hidden;
   }
 
   :global(.splitpanes__splitter) {
-    background: var(--secondary);
+    background: var(--border) !important;
     position: relative;
+    z-index: 10;
+    transition: background var(--transition-fast);
   }
 
-  :global(.splitpanes__splitter:before) {
-    content: '';
-    position: absolute;
-    left: 0;
-    top: 0;
-    transition: opacity 0.4s;
-    background-color: var(--accent);
-    opacity: 0;
-    z-index: 1;
+  :global(.splitpanes__splitter:hover) {
+    background: var(--accent) !important;
   }
 
-  :global(.splitpanes__splitter:hover:before) {
-    opacity: 1;
+  /* Vertical splitter sizing */
+  :global(.splitpanes--vertical > .splitpanes__splitter) {
+    width: 4px !important;
+    cursor: col-resize;
   }
 
-  :global(.splitpanes--vertical > .splitpanes__splitter:before) {
-    left: -2px;
-    right: -2px;
-    height: 100%;
-    width: auto;
-  }
-
-  :global(.splitpanes--horizontal > .splitpanes__splitter:before) {
-    top: -2px;
-    bottom: -2px;
-    width: 100%;
-    height: auto;
+  /* Horizontal splitter sizing */
+  :global(.splitpanes--horizontal > .splitpanes__splitter) {
+    height: 4px !important;
+    cursor: row-resize;
   }
 </style>

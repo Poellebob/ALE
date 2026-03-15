@@ -1,7 +1,7 @@
 {
   "name": "ale",
   "version": "0.1.0",
-  "description": "",
+  "description": "ALE — A LaTeX Editor",
   "type": "module",
   "scripts": {
     "dev": "vite dev",

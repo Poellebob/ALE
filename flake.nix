@@ -1,8 +1,8 @@
 {
-  description = "LaTeX editor — Tauri + CodeMirror 6 + SageTex";
+  description = "ALE — LaTeX editor dev shell (Tauri + SvelteKit)";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
+    nixpkgs.url     = "github:NixOS/nixpkgs/nixos-25.11";
     flake-utils.url = "github:numtide/flake-utils";
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
@@ -18,25 +18,19 @@
           overlays = [ rust-overlay.overlays.default ];
         };
 
-        rustToolchain = pkgs.rust-bin.stable.latest.default.override {
-          extensions = [
-            "rust-src"
-            "rust-analyzer"
-            "clippy"
-            "rustfmt"
-          ];
+        rust = pkgs.rust-bin.stable.latest.default.override {
+          extensions = [ "rust-src" "rust-analyzer" "clippy" "rustfmt" ];
         };
 
-        texliveEnv = pkgs.texliveFull.withPackages (ps: with ps; [
+        tex = pkgs.texliveFull.withPackages (ps: with ps; [
           latexmk
           collection-latexextra
           collection-mathscience
         ]);
-      in
-      {
+      in {
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
-            rustToolchain
+            rust
             nodejs_24
             pnpm
             pkg-config
@@ -53,28 +47,15 @@
             librsvg
             xdotool
             libayatana-appindicator
-            sagetex
-
-            texliveEnv
-            sage
-
-            cargo-watch
-            nodePackages.typescript
+            tex
           ];
 
           shellHook = ''
-            # pkg-config must be able to find openssl headers
             export PKG_CONFIG_PATH="${pkgs.openssl.dev}/lib/pkgconfig:$PKG_CONFIG_PATH"
-
-            # Make sure GLib schemas are available (required by GTK)
             export XDG_DATA_DIRS="${pkgs.gtk3}/share/gsettings-schemas/${pkgs.gtk3.name}:$XDG_DATA_DIRS"
             export GIO_MODULE_DIR="${pkgs.glib-networking}/lib/gio/modules/"
-
-            # Silence WebKit compositing errors on some Linux setups
             export WEBKIT_DISABLE_COMPOSITING_MODE=1
-
-            echo "LaTeX editor dev shell ready."
-            echo "  Rust $(rustc --version)"
+            echo "ALE dev shell ready — Rust $(rustc --version)"
           '';
         };
       }

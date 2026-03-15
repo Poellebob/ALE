@@ -1,360 +1,250 @@
-import { EditorView, Decoration, WidgetType, ViewPlugin, keymap } from '@codemirror/view';
-import { EditorState, RangeSetBuilder, type RangeSet } from '@codemirror/state';
+// src/lib/latexDecorations.ts
+//
+// Provides CodeMirror ViewPlugin extensions that render rich widgets
+// in place of raw LaTeX syntax — inline/display KaTeX math and list
+// item markers — without modifying the underlying document.
+//
+// The rawMode flag disables all widgets so the user sees plain LaTeX.
+// Toggle it via toggleRawMode() and call refreshDecorations() to force
+// an immediate redraw.
+//
+// See docs/06-decorations.md for the full architecture.
+
+import {
+  EditorView,
+  Decoration,
+  WidgetType,
+  ViewPlugin,
+  type DecorationSet,
+} from '@codemirror/view';
+import { EditorState, RangeSetBuilder } from '@codemirror/state';
 import katex from 'katex';
-import 'katex/dist/katex.min.css';
 
-export type DecorationClass = 'A' | 'B';
-
-export abstract class LatexDecoration {
-  abstract class: DecorationClass;
-  abstract pattern: RegExp;
-  abstract getRawText(match: RegExpExecArray): string;
-  abstract render(match: RegExpExecArray): HTMLElement;
-  
-  isCollapsed(_state: EditorState, _from: number, _to: number): boolean {
-    return false;
-  }
-  
-  handleBackspace?(view: EditorView, pos: number): boolean;
-  
-  enabled?(): boolean;
-}
+// ---------------------------------------------------------------------------
+// Raw mode toggle
+// ---------------------------------------------------------------------------
 
 let rawMode = false;
 
+export function setRawMode(enabled: boolean): void {
+  rawMode = enabled;
+}
 export function toggleRawMode(): boolean {
   rawMode = !rawMode;
   return rawMode;
 }
-
 export function isRawMode(): boolean {
   return rawMode;
 }
 
-let renderSettings = { math: true, formatting: true, headings: true };
-
-export function setRenderSettings(math: boolean, formatting: boolean, headings: boolean) {
-  renderSettings = { math, formatting, headings };
+// A callback registered by the Editor component so we can force a redraw
+// when raw mode is toggled from outside.
+let _refresh: (() => void) | null = null;
+export function setRefreshFn(fn: () => void): void {
+  _refresh = fn;
+}
+export function refreshDecorations(): void {
+  _refresh?.();
 }
 
-export class InlineMathDecoration extends LatexDecoration {
-  class: DecorationClass = 'A';
-  pattern = /\$([^$\n]+)\$/g;
-  
-  enabled(): boolean { return renderSettings.math; }
-  
-  getRawText(match: RegExpExecArray): string { return match[0]; }
-  
-  render(match: RegExpExecArray): HTMLElement {
+// ---------------------------------------------------------------------------
+// Widget base
+// ---------------------------------------------------------------------------
+
+/** Shared base for all decoration widgets. */
+abstract class LatexWidget extends WidgetType {
+  abstract renderDOM(): HTMLElement;
+
+  toDOM(): HTMLElement {
+    return this.renderDOM();
+  }
+
+  // Prevent CodeMirror from reusing a stale widget when content changes
+  eq(other: LatexWidget): boolean {
+    return this.renderDOM().textContent === other.renderDOM().textContent;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Math widgets
+// ---------------------------------------------------------------------------
+
+class InlineMathWidget extends LatexWidget {
+  constructor(private readonly tex: string) {
+    super();
+  }
+
+  renderDOM(): HTMLElement {
     const wrap = document.createElement('span');
     wrap.className = 'cm-math-inline';
-    const tex = match[1];
     try {
-      wrap.innerHTML = '$' + katex.renderToString(tex, { displayMode: false, throwOnError: true, output: 'html' }) + '$';
-    } catch (error) {
-      console.error('KaTeX inline math parsing error:', error, 'for:', tex);
-      wrap.textContent = match[0];
+      wrap.innerHTML = katex.renderToString(this.tex, {
+        displayMode: false,
+        throwOnError: false,
+        output: 'html',
+      });
+    } catch {
+      wrap.textContent = `$${this.tex}$`;
+      wrap.style.color = 'var(--error)';
     }
     return wrap;
   }
-  
-  isCollapsed(state: EditorState, from: number, to: number): boolean {
-    return state.selection.main.head > from && state.selection.main.head < to;
+
+  eq(other: LatexWidget): boolean {
+    return other instanceof InlineMathWidget && other.tex === this.tex;
   }
 }
 
-export class DisplayMathDecoration extends LatexDecoration {
-  class: DecorationClass = 'A';
-  pattern = /\$\$([^$]+)\$\$/g;
-  
-  enabled(): boolean { return renderSettings.math; }
-  
-  getRawText(match: RegExpExecArray): string { return match[0]; }
-  
-  render(match: RegExpExecArray): HTMLElement {
+class DisplayMathWidget extends LatexWidget {
+  constructor(private readonly tex: string) {
+    super();
+  }
+
+  renderDOM(): HTMLElement {
     const wrap = document.createElement('div');
     wrap.className = 'cm-math-display';
-    const tex = match[1];
     try {
-      wrap.innerHTML = '$$' + katex.renderToString(tex, { displayMode: true, throwOnError: true, output: 'html' }) + '$$';
-    } catch (error) {
-      console.error('KaTeX display math parsing error:', error, 'for:', tex);
-      wrap.textContent = match[0];
+      wrap.innerHTML = katex.renderToString(this.tex, {
+        displayMode: true,
+        throwOnError: false,
+        output: 'html',
+      });
+    } catch {
+      wrap.textContent = `$$${this.tex}$$`;
+      wrap.style.color = 'var(--error)';
     }
     return wrap;
   }
-  
-  isCollapsed(state: EditorState, from: number, to: number): boolean {
-    return state.selection.main.head > from && state.selection.main.head < to;
+
+  eq(other: LatexWidget): boolean {
+    return other instanceof DisplayMathWidget && other.tex === this.tex;
   }
 }
 
-export class BoldDecoration extends LatexDecoration {
-  class: DecorationClass = 'A';
-  pattern = /\\textbf\{([^}]+)\}/g;
-  
-  enabled(): boolean { return renderSettings.formatting; }
-  
-  getRawText(match: RegExpExecArray): string { return match[0]; }
-  
-  render(match: RegExpExecArray): HTMLElement {
-    const wrap = document.createElement('span');
-    wrap.className = 'cm-bold';
-    wrap.textContent = match[1];
-    wrap.style.fontWeight = 'bold';
-    return wrap;
-  }
-  
-  isCollapsed(state: EditorState, from: number, to: number): boolean {
-    return state.selection.main.head > from && state.selection.main.head < to;
+// ---------------------------------------------------------------------------
+// List marker widgets
+// ---------------------------------------------------------------------------
+
+class BulletWidget extends LatexWidget {
+  renderDOM(): HTMLElement {
+    const span = document.createElement('span');
+    span.className = 'cm-itemize-bullet';
+    span.textContent = '• ';
+    return span;
   }
 }
 
-export class ItalicDecoration extends LatexDecoration {
-  class: DecorationClass = 'A';
-  pattern = /\\textit\{([^}]+)\}|\\emph\{([^}]+)\}/g;
-  
-  enabled(): boolean { return renderSettings.formatting; }
-  
-  getRawText(match: RegExpExecArray): string { return match[0]; }
-  
-  render(match: RegExpExecArray): HTMLElement {
-    const wrap = document.createElement('span');
-    wrap.className = 'cm-italic';
-    wrap.textContent = match[1] || match[2];
-    wrap.style.fontStyle = 'italic';
-    return wrap;
+class EnumerateWidget extends LatexWidget {
+  constructor(private readonly number: number) {
+    super();
   }
-  
-  isCollapsed(state: EditorState, from: number, to: number): boolean {
-    return state.selection.main.head > from && state.selection.main.head < to;
+
+  renderDOM(): HTMLElement {
+    const span = document.createElement('span');
+    span.className = 'cm-enumerate-number';
+    span.textContent = `${this.number}. `;
+    return span;
+  }
+
+  eq(other: LatexWidget): boolean {
+    return other instanceof EnumerateWidget && other.number === this.number;
   }
 }
 
-export class SectionDecoration extends LatexDecoration {
-  class: DecorationClass = 'A';
-  pattern = /\\section\{([^}]+)\}/g;
-  
-  enabled(): boolean { return renderSettings.headings; }
-  
-  getRawText(match: RegExpExecArray): string { return match[0]; }
-  
-  render(match: RegExpExecArray): HTMLElement {
-    const wrap = document.createElement('div');
-    wrap.className = 'cm-heading cm-section';
-    wrap.textContent = match[1];
-    wrap.style.fontSize = '1.4em';
-    wrap.style.fontWeight = 'bold';
-    wrap.style.marginTop = '1em';
-    return wrap;
+function isCursorInRange(
+  state: EditorState,
+  from: number,
+  to: number
+): boolean {
+  for (const range of state.selection.ranges) {
+    if (range.head >= from && range.head <= to) return true;
+    if (range.anchor >= from && range.anchor <= to) return true;
   }
-  
-  isCollapsed(state: EditorState, from: number, to: number): boolean {
-    return state.selection.main.head > from && state.selection.main.head < to;
-  }
+  return false;
 }
 
-export class SubsectionDecoration extends LatexDecoration {
-  class: DecorationClass = 'A';
-  pattern = /\\subsection\{([^}]+)\}/g;
-  
-  enabled(): boolean { return renderSettings.headings; }
-  
-  getRawText(match: RegExpExecArray): string { return match[0]; }
-  
-  render(match: RegExpExecArray): HTMLElement {
-    const wrap = document.createElement('div');
-    wrap.className = 'cm-heading cm-subsection';
-    wrap.textContent = match[1];
-    wrap.style.fontSize = '1.2em';
-    wrap.style.fontWeight = 'bold';
-    wrap.style.marginTop = '0.8em';
-    return wrap;
-  }
-  
-  isCollapsed(state: EditorState, from: number, to: number): boolean {
-    return state.selection.main.head > from && state.selection.main.head < to;
-  }
+function itemNumber(text: string, index: number): number {
+  const before = text.slice(0, index);
+  return (before.match(/\\item\b/g) ?? []).length + 1;
 }
 
-export class SubsubsectionDecoration extends LatexDecoration {
-  class: DecorationClass = 'A';
-  pattern = /\\subsubsection\{([^}]+)\}/g;
-  
-  enabled(): boolean { return renderSettings.headings; }
-  
-  getRawText(match: RegExpExecArray): string { return match[0]; }
-  
-  render(match: RegExpExecArray): HTMLElement {
-    const wrap = document.createElement('div');
-    wrap.className = 'cm-heading cm-subsubsection';
-    wrap.textContent = match[1];
-    wrap.style.fontSize = '1.1em';
-    wrap.style.fontWeight = 'bold';
-    wrap.style.marginTop = '0.6em';
-    return wrap;
-  }
-  
-  isCollapsed(state: EditorState, from: number, to: number): boolean {
-    return state.selection.main.head > from && state.selection.main.head < to;
-  }
+function insideEnumerate(text: string, index: number): boolean {
+  const before = text.slice(0, index);
+  const lastBeginItemize   = before.lastIndexOf('\\begin{itemize}');
+  const lastBeginEnumerate = before.lastIndexOf('\\begin{enumerate}');
+  return lastBeginEnumerate > lastBeginItemize;
 }
 
-function findListType(doc: string, itemPos: number): 'itemize' | 'enumerate' | null {
-  const before = doc.slice(0, itemPos);
-  const itemizeMatch = before.match(/\\begin\{itemize\}/);
-  const enumerateMatch = before.match(/\\begin\{enumerate\}/);
-  
-  if (!itemizeMatch && !enumerateMatch) return null;
-  if (!itemizeMatch) return 'enumerate';
-  if (!enumerateMatch) return 'itemize';
-  
-  return itemizeMatch.index! > enumerateMatch.index! ? 'itemize' : 'enumerate';
-}
-
-export class ListItemDecoration extends LatexDecoration {
-  class: DecorationClass = 'B';
-  pattern = /\\item\s+/g;
-  
-  getRawText(match: RegExpExecArray): string { return match[0]; }
-  
-  render(match: RegExpExecArray): HTMLElement {
-    const doc = match.input;
-    const itemPos = match.index!;
-    const listType = findListType(doc, itemPos);
-    
-    const wrap = document.createElement('span');
-    wrap.className = 'cm-list-item';
-    
-    if (listType === 'enumerate') {
-      const beforeMatch = doc.slice(0, itemPos);
-      const itemCount = (beforeMatch.match(/\\item\s+/g) || []).length;
-      wrap.textContent = `${itemCount + 1}. `;
-      wrap.style.color = '#2563eb';
-    } else {
-      wrap.textContent = '• ';
-      wrap.style.color = '#dc2626';
-    }
-    wrap.style.fontWeight = '600';
-    return wrap;
-  }
-  
-  handleBackspace(view: EditorView, pos: number): boolean {
-    const line = view.state.doc.lineAt(pos);
-    const lineText = line.text;
-    
-    if (lineText.match(/^(\s*)(•|\d+\.)\s*/)) {
-      const match = lineText.match(/^(\s*)(•|\d+\.)\s*(.*)$/);
-      if (match) {
-        const [, indent, , content] = match;
-        const newText = indent + (content || '');
-        view.dispatch({ changes: { from: line.from, to: line.to, insert: newText } });
-        return true;
-      }
-    }
-    return false;
-  }
-}
-
-export const decorations: LatexDecoration[] = [
-  new InlineMathDecoration(),
-  new DisplayMathDecoration(),
-  new BoldDecoration(),
-  new ItalicDecoration(),
-  new SectionDecoration(),
-  new SubsectionDecoration(),
-  new SubsubsectionDecoration(),
-  new ListItemDecoration(),
-];
-
-interface DecorationRange {
-  from: number;
-  to: number;
-  deco: LatexDecoration;
-  match: RegExpExecArray;
-}
+// ---------------------------------------------------------------------------
+// ViewPlugin
+// ---------------------------------------------------------------------------
 
 export function createDecorationPlugin() {
-  return ViewPlugin.fromClass(class {
-    decorations: RangeSet<Decoration>;
-    
-    constructor(view: EditorView) {
-      this.decorations = this.buildDecorations(view);
-    }
-    
-    update(update: any) {
-      if (update.docChanged || update.viewportChanged) {
-        this.decorations = this.buildDecorations(update.view);
+  return ViewPlugin.fromClass(
+    class {
+      decorations: DecorationSet;
+
+      constructor(view: EditorView) {
+        this.decorations = this.build(view);
       }
-    }
-    
-    buildDecorations(view: EditorView): RangeSet<Decoration> {
-      const builder = new RangeSetBuilder<Decoration>();
-      const doc = view.state.doc.toString();
-      
-      const ranges: DecorationRange[] = [];
-      
-              for (const deco of decorations) {
-                if (deco.enabled && !deco.enabled()) continue;
-                
-                deco.pattern.lastIndex = 0; // Reset regex for consistent iteration
-                let match;
-                
-                while ((match = deco.pattern.exec(doc)) !== null) {
-                  const from = match.index;
-                  const to = from + match[0].length;          
-          const shouldShowRaw = rawMode || 
-            (deco.class === 'A' && deco.isCollapsed(view.state, from, to));
-          
-          if (!shouldShowRaw) {
-            ranges.push({ from, to, deco, match });
+
+      update(update: { docChanged: boolean; viewportChanged: boolean; view: EditorView }) {
+        if (update.docChanged || update.viewportChanged) {
+          this.decorations = this.build(update.view);
+        }
+      }
+
+      build(view: EditorView): DecorationSet {
+        if (rawMode) return Decoration.none;
+
+        const builder = new RangeSetBuilder<Decoration>();
+        const doc = view.state.doc.toString();
+
+        // --- Display math ($$...$$)  — must be matched BEFORE inline math ---
+        const displayMathRe = /\$\$([\s\S]+?)\$\$/g;
+        for (const match of doc.matchAll(displayMathRe)) {
+          const from = match.index!;
+          const to = from + match[0].length;
+          if (!isCursorInRange(view.state, from, to)) {
+            builder.add(
+              from,
+              to,
+              Decoration.replace({ widget: new DisplayMathWidget(match[1]) })
+            );
           }
         }
-      }
-      
-      ranges.sort((a, b) => a.from - b.from);
-      
-      for (const range of ranges) {
-        const widget = new class extends WidgetType {
-          toDOM(): HTMLElement { return range.deco.render(range.match); }
-        };
-        
-        const deco = Decoration.replace({ widget });
-        
-        if (range.deco.class === 'B') {
-          builder.add(range.from, range.from + 1, deco);
-        } else {
-          builder.add(range.from, range.to, deco);
+
+        // --- Inline math ($...$) ---
+        // Negative lookbehind so we skip $$
+        const inlineMathRe = /(?<!\$)\$(?!\$)([^\n$]+?)(?<!\$)\$(?!\$)/g;
+        for (const match of doc.matchAll(inlineMathRe)) {
+          const from = match.index!;
+          const to = from + match[0].length;
+          if (!isCursorInRange(view.state, from, to)) {
+            builder.add(
+              from,
+              to,
+              Decoration.replace({ widget: new InlineMathWidget(match[1]) })
+            );
+          }
         }
+
+        // --- \item markers ---
+        const itemRe = /\\item(?:\s)/g;
+        for (const match of doc.matchAll(itemRe)) {
+          const from = match.index!;
+          const to = from + match[0].length;
+          if (!isCursorInRange(view.state, from, to)) {
+            const widget = insideEnumerate(doc, from)
+              ? new EnumerateWidget(itemNumber(doc, from))
+              : new BulletWidget();
+            builder.add(from, to, Decoration.replace({ widget }));
+          }
+        }
+
+        return builder.finish();
       }
-      
-      return builder.finish();
-    }
-  }, {
-    decorations: (v: any) => v.decorations
-  });
-}
-
-export const decorationKeymap = keymap.of([{
-  key: 'Backspace',
-  run: (view: EditorView) => {
-    if (rawMode) return false;
-    const pos = view.state.selection.main.head;
-    for (const deco of decorations) {
-      if (deco.class === 'B' && deco.handleBackspace) {
-        if (deco.handleBackspace(view, pos)) return true;
-      }
-    }
-    return false;
-  }
-}]);
-
-let refreshFn: (() => void) | null = null;
-
-export function setRefreshFn(fn: () => void) {
-  refreshFn = fn;
-}
-
-export function refreshDecorations() {
-  if (refreshFn) refreshFn();
+    },
+    { decorations: (v) => v.decorations }
+  );
 }

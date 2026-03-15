@@ -1,0 +1,242 @@
+/* =============================================================================
+   ALE — Design Token System
+   src/lib/theme.css
+   
+   Every colour, size, shadow, and transition in the app is defined here as a
+   CSS custom property. Components reference these tokens — never raw values.
+   Dark mode is activated by setting data-theme="dark" on <html>.
+   ============================================================================= */
+
+/* ---------------------------------------------------------------------------
+   Light theme (default)
+   --------------------------------------------------------------------------- */
+:root,
+[data-theme="light"] {
+  /* --- Background layers ---
+     Use bg for the app shell, surface for cards/panels, raised for popups. */
+  --bg:             #f4f4f5;
+  --bg-secondary:   #e4e4e7;
+  --surface:        #ffffff;
+  --surface-raised: #fafafa;
+  --overlay:        rgba(255, 255, 255, 0.92);
+
+  /* --- Borders --- */
+  --border:         #d4d4d8;
+  --border-subtle:  #e4e4e7;
+  --border-strong:  #a1a1aa;
+
+  /* --- Text --- */
+  --text:           #18181b;
+  --text-muted:     #52525b;
+  --text-subtle:    #a1a1aa;
+  --text-inverse:   #ffffff;
+  --text-on-accent: #ffffff;
+
+  /* --- Accent (interactive elements, focus rings, highlights) --- */
+  --accent:         #0ea5e9;
+  --accent-hover:   #0284c7;
+  --accent-active:  #0369a1;
+  --accent-subtle:  #e0f2fe;
+  --accent-muted:   #bae6fd;
+
+  /* --- Semantic colours --- */
+  --success:        #16a34a;
+  --success-subtle: #dcfce7;
+  --error:          #dc2626;
+  --error-subtle:   #fee2e2;
+  --warning:        #d97706;
+  --warning-subtle: #fef3c7;
+  --info:           #2563eb;
+  --info-subtle:    #dbeafe;
+
+  /* --- Editor-specific colours --- */
+  --editor-bg:      #ffffff;
+  --editor-gutter:  #f7f7f7;
+  --editor-gutter-text:   #a1a1aa;
+  --editor-active-line:   #f0f7ff;
+  --editor-active-gutter: #dbeafe;
+  --editor-selection:     #c8e0ff;
+  --editor-cursor:        #18181b;
+
+  /* LaTeX syntax tokens */
+  --syntax-keyword:   #7c3aed;
+  --syntax-command:   #0369a1;
+  --syntax-math:      #1d4ed8;
+  --syntax-comment:   #6b7280;
+  --syntax-string:    #0f766e;
+
+  /* Decoration colours */
+  --deco-bullet:    #dc2626;
+  --deco-enumerate: #2563eb;
+  --deco-math-bg:   rgba(219, 234, 254, 0.35);
+
+  /* --- Log panel --- */
+  --log-bg:         #1c1c1e;
+  --log-text:       #d4d4d8;
+  --log-stderr:     #f87171;
+  --log-meta:       #71717a;
+
+  /* --- PDF pane --- */
+  --pdf-bg:         #e4e4e7;
+  --pdf-placeholder-text: #71717a;
+
+  /* --- Typography --- */
+  --font-ui:    -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-mono:  'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
+  --font-size-xs:   11px;
+  --font-size-sm:   12px;
+  --font-size-base: 13px;
+  --font-size-md:   14px;
+  --font-size-lg:   16px;
+  --font-size-xl:   20px;
+  --line-height-tight:  1.3;
+  --line-height-normal: 1.5;
+
+  /* --- Spacing scale (4px base) --- */
+  --space-0: 0px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* --- Border radius --- */
+  --radius-sm:   3px;
+  --radius-md:   6px;
+  --radius-lg:   10px;
+  --radius-xl:   16px;
+  --radius-full: 9999px;
+
+  /* --- Shadows --- */
+  --shadow-sm:  0 1px 2px rgba(0, 0, 0, 0.06);
+  --shadow-md:  0 4px 12px rgba(0, 0, 0, 0.10);
+  --shadow-lg:  0 8px 24px rgba(0, 0, 0, 0.14);
+  --shadow-popup: 0 2px 8px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.06);
+
+  /* --- Layout constants --- */
+  --toolbar-height: 38px;
+  --statusbar-height: 24px;
+
+  /* --- Transitions --- */
+  --transition-fast:   100ms ease;
+  --transition-base:   180ms ease;
+  --transition-slow:   300ms ease;
+}
+
+/* ---------------------------------------------------------------------------
+   Dark theme
+   --------------------------------------------------------------------------- */
+[data-theme="dark"] {
+  --bg:             #09090b;
+  --bg-secondary:   #18181b;
+  --surface:        #18181b;
+  --surface-raised: #27272a;
+  --overlay:        rgba(24, 24, 27, 0.95);
+
+  --border:         #3f3f46;
+  --border-subtle:  #27272a;
+  --border-strong:  #52525b;
+
+  --text:           #fafafa;
+  --text-muted:     #a1a1aa;
+  --text-subtle:    #71717a;
+  --text-inverse:   #09090b;
+  --text-on-accent: #ffffff;
+
+  --accent:         #38bdf8;
+  --accent-hover:   #7dd3fc;
+  --accent-active:  #bae6fd;
+  --accent-subtle:  #0c4a6e;
+  --accent-muted:   #075985;
+
+  --success:        #4ade80;
+  --success-subtle: #14532d;
+  --error:          #f87171;
+  --error-subtle:   #7f1d1d;
+  --warning:        #fbbf24;
+  --warning-subtle: #78350f;
+  --info:           #60a5fa;
+  --info-subtle:    #1e3a5f;
+
+  --editor-bg:            #141415;
+  --editor-gutter:        #111112;
+  --editor-gutter-text:   #52525b;
+  --editor-active-line:   #1e2030;
+  --editor-active-gutter: #1a2035;
+  --editor-selection:     #264f78;
+  --editor-cursor:        #f4f4f5;
+
+  --syntax-keyword:   #c084fc;
+  --syntax-command:   #60a5fa;
+  --syntax-math:      #93c5fd;
+  --syntax-comment:   #6b7280;
+  --syntax-string:    #34d399;
+
+  --deco-bullet:    #f87171;
+  --deco-enumerate: #60a5fa;
+  --deco-math-bg:   rgba(30, 58, 138, 0.25);
+
+  --log-bg:         #000000;
+  --log-text:       #a1a1aa;
+  --log-stderr:     #f87171;
+  --log-meta:       #52525b;
+
+  --pdf-bg:         #1c1c1e;
+  --pdf-placeholder-text: #52525b;
+
+  --shadow-sm:  0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md:  0 4px 12px rgba(0, 0, 0, 0.4);
+  --shadow-lg:  0 8px 24px rgba(0, 0, 0, 0.5);
+  --shadow-popup: 0 2px 8px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+
+/* ---------------------------------------------------------------------------
+   Global reset & base styles
+   --------------------------------------------------------------------------- */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  font-family: var(--font-ui);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-normal);
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  overflow: hidden; /* Tauri desktop app — no scroll on body */
+  height: 100vh;
+  background: var(--bg);
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  cursor: pointer;
+  border: none;
+  background: none;
+  color: inherit;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+/* Focus ring — visible for keyboard navigation */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+:focus:not(:focus-visible) {
+  outline: none;
+}

@@ -1,0 +1,123 @@
+/* =============================================================================
+   ALE — CodeMirror Theme Overrides
+   src/lib/editor.css
+
+   These styles are applied on top of CodeMirror's own stylesheet.
+   They reference design tokens from theme.css so the editor respects
+   both light and dark themes without any JavaScript involvement.
+   ============================================================================= */
+
+/* --- Container --- */
+.cm-editor {
+  height: 100%;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-md);
+  background: var(--editor-bg);
+  color: var(--text);
+}
+
+.cm-scroller {
+  overflow: auto;
+  font-family: var(--font-mono) !important;
+}
+
+/* --- Cursor --- */
+.cm-cursor,
+.cm-dropCursor {
+  border-left-color: var(--editor-cursor) !important;
+}
+
+/* --- Selection --- */
+.cm-selectionBackground,
+.cm-focused .cm-selectionBackground,
+::selection {
+  background: var(--editor-selection) !important;
+}
+
+/* --- Active line --- */
+.cm-activeLine {
+  background: var(--editor-active-line) !important;
+}
+
+/* --- Gutter --- */
+.cm-gutters {
+  background: var(--editor-gutter) !important;
+  color: var(--editor-gutter-text) !important;
+  border-right: 1px solid var(--border) !important;
+}
+
+.cm-activeLineGutter {
+  background: var(--editor-active-gutter) !important;
+  color: var(--text-muted) !important;
+}
+
+.cm-lineNumbers .cm-gutterElement {
+  padding-right: var(--space-3);
+  min-width: 40px;
+}
+
+/* --- Search match highlight --- */
+.cm-searchMatch {
+  background: var(--warning-subtle);
+  outline: 1px solid var(--warning);
+}
+
+.cm-searchMatch-selected {
+  background: var(--accent-subtle);
+  outline: 1px solid var(--accent);
+}
+
+/* --- Matching brackets --- */
+.cm-matchingBracket {
+  background: var(--accent-subtle);
+  color: var(--accent) !important;
+  border-radius: var(--radius-sm);
+}
+
+/* --- LaTeX syntax tokens (mapped from StreamLanguage return values) --- */
+.cm-keyword { color: var(--syntax-keyword); }
+.cm-attributeName { color: var(--syntax-command); }
+.cm-string { color: var(--syntax-math); }
+.cm-comment { color: var(--syntax-comment); font-style: italic; }
+
+/* --- Decoration widgets --- */
+.cm-math-inline {
+  margin: 0 var(--space-1);
+  vertical-align: middle;
+  background: var(--deco-math-bg);
+  border-radius: var(--radius-sm);
+  padding: 0 2px;
+  cursor: text;
+}
+
+.cm-math-display {
+  display: block;
+  margin: var(--space-2) 0;
+  text-align: center;
+  background: var(--deco-math-bg);
+  border-radius: var(--radius-md);
+  padding: var(--space-2);
+  cursor: text;
+}
+
+.cm-itemize-bullet {
+  color: var(--deco-bullet);
+  font-weight: 700;
+  user-select: none;
+}
+
+.cm-enumerate-number {
+  color: var(--deco-enumerate);
+  font-weight: 700;
+  user-select: none;
+}
+
+/* --- KaTeX inside the editor --- */
+.cm-math-inline .katex,
+.cm-math-display .katex {
+  font-size: 1em;
+}
+
+.cm-math-display .katex-display {
+  margin: 0;
+}
