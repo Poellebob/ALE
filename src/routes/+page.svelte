@@ -3,16 +3,19 @@
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
   import { open, save } from '@tauri-apps/plugin-dialog';
-  import { getCurrentWindow } from '@tauri-apps/api/window';
   import { onMount, onDestroy } from 'svelte';
   import Editor from '$lib/components/Editor.svelte';
   import PdfViewer from '$lib/components/PdfViewer.svelte';
+  import TabBar from '$lib/components/TabBar.svelte';
   import { fileStore, buildStore, type BuildLogEntry } from '$lib/stores';
+  import type { Tab } from '$lib/tabs/definitions';
+  import { snippets } from '$lib/snippets';
+  import { toggleRawMode, isRawMode, refreshDecorations } from '$lib/latexDecorations';
 
   let editorComponent: Editor;
-  let pdfPath: string | null = null;
   let showLog = $state(false);
   let logContainer: HTMLDivElement;
+  let rawMode = $state(false);
 
   let fileState = $state({ path: null as string | null, content: '', dirty: false });
   let buildState = $state({ status: 'idle' as 'idle' | 'building' | 'success' | 'error', logs: [] as BuildLogEntry[], pdfPath: null as string | null, error: null as string | null });
@@ -26,19 +29,48 @@
     unlisten = await listen<{ line: string; stream: string }>('build-log', (event) => {
       buildStore.addLog(event.payload.line, event.payload.stream as 'stdout' | 'stderr');
     });
+
+    window.addEventListener('keydown', handleKeydown);
   });
 
   onDestroy(() => {
     if (unlisten) unlisten();
     unsubFile();
     unsubBuild();
+    window.removeEventListener('keydown', handleKeydown);
   });
+
+  function handleKeydown(e: KeyboardEvent) {
+    if (e.ctrlKey || e.metaKey) {
+      if (e.key === 's') {
+        e.preventDefault();
+        if (e.shiftKey) {
+          handleSaveAs();
+        } else {
+          handleSave();
+        }
+      } else if (e.key === 'b') {
+        e.preventDefault();
+        handleBuild();
+      } else if (e.key === 'n') {
+        e.preventDefault();
+        handleNew();
+      } else if (e.key === 'o') {
+        e.preventDefault();
+        handleOpen();
+      }
+    }
+  }
 
   $effect(() => {
     if (buildState.logs.length && logContainer) {
       logContainer.scrollTop = logContainer.scrollHeight;
     }
   });
+
+  function handleNew() {
+    fileStore.reset();
+  }
 
   async function handleOpen() {
     const selected = await open({
@@ -64,83 +96,114 @@
     fileStore.setPath(path);
   }
 
+  async function handleSaveAs() {
+    const selected = await save({
+      filters: [{ name: 'LaTeX', extensions: ['tex'] }]
+    });
+    if (!selected) return;
+    await invoke('write_tex_file', { path: selected, content: fileState.content });
+    fileStore.setPath(selected);
+  }
+
   async function handleBuild() {
     if (!fileState.path) {
       await handleSave();
       if (!fileState.path) return;
     }
     
-    buildStore.start();
-    
-    const result = await invoke<{ success: boolean; pdf_path: string | null; error: string | null }>('build_latex', { path: fileState.path });
-    
-    if (result.success && result.pdf_path) {
-      buildStore.success(result.pdf_path);
-      pdfPath = result.pdf_path;
-    } else {
-      buildStore.error(result.error || 'Build failed');
-    }
+    await buildStore.triggerBuild();
+  }
+
+  function handleToggleRawMode() {
+    rawMode = toggleRawMode();
+    refreshDecorations();
   }
 
   function handleContentChange(content: string) {
     fileStore.setContent(content);
   }
 
-  async function minimizeWindow() {
-    await getCurrentWindow().minimize();
-  }
-
-  async function toggleMaximize() {
-    const win = getCurrentWindow();
-    if (await win.isMaximized()) {
-      await win.unmaximize();
-    } else {
-      await win.maximize();
+  function handleInsert(snippetId: string) {
+    const snippet = snippets.find(s => s.trigger === snippetId);
+    if (snippet && editorComponent) {
+      const expansion = snippet.expansion
+        .replace(/\$0/g, '')
+        .replace(/\$[1-9]/g, '');
+      
+      editorComponent.insertText(expansion);
     }
   }
 
-  async function closeWindow() {
-    await getCurrentWindow().close();
+  function handleUndo() {
+    if (editorComponent) editorComponent.undo();
   }
+
+  function handleRedo() {
+    if (editorComponent) editorComponent.redo();
+  }
+
+  function handleCut() {
+    document.execCommand('cut');
+  }
+
+  function handleCopy() {
+    document.execCommand('copy');
+  }
+
+  function handlePaste() {
+    document.execCommand('paste');
+  }
+
+  const tabs: Tab[] = $derived([
+    {
+      id: 'file',
+      label: 'File',
+      actions: [
+        { id: 'new', label: 'New', shortcut: 'Ctrl+N', action: handleNew },
+        { id: 'open', label: 'Open', shortcut: 'Ctrl+O', action: handleOpen },
+        { id: 'save', label: 'Save', shortcut: 'Ctrl+S', action: handleSave },
+        { id: 'saveas', label: 'Save As', shortcut: 'Ctrl+Shift+S', action: handleSaveAs }
+      ]
+    },
+    {
+      id: 'edit',
+      label: 'Edit',
+      actions: [
+        { id: 'undo', label: 'Undo', shortcut: 'Ctrl+Z', action: handleUndo },
+        { id: 'redo', label: 'Redo', shortcut: 'Ctrl+Y', action: handleRedo },
+        { id: 'cut', label: 'Cut', shortcut: 'Ctrl+X', action: handleCut },
+        { id: 'copy', label: 'Copy', shortcut: 'Ctrl+C', action: handleCopy },
+        { id: 'paste', label: 'Paste', shortcut: 'Ctrl+V', action: handlePaste }
+      ]
+    },
+    {
+      id: 'insert',
+      label: 'Insert',
+      actions: [
+        { id: 'section', label: 'Section', action: () => handleInsert('sec') },
+        { id: 'subsection', label: 'Subsection', action: () => handleInsert('ssec') },
+        { id: 'figure', label: 'Figure', action: () => handleInsert('fig') },
+        { id: 'table', label: 'Table', action: () => handleInsert('tab') },
+        { id: 'reference', label: 'Reference', action: () => handleInsert('ref') },
+        { id: 'citation', label: 'Citation', action: () => handleInsert('cite') },
+        { id: 'itemize', label: 'Itemize', action: () => handleInsert('-') },
+        { id: 'enumerate', label: 'Enumerate', action: () => handleInsert('1.') },
+        { id: 'math', label: 'Math', action: () => handleInsert('$$') }
+      ]
+    },
+    {
+      id: 'build',
+      label: 'Build',
+      actions: [
+        { id: 'build', label: buildState.status === 'building' ? 'Building...' : 'Build PDF', shortcut: 'Ctrl+B', action: handleBuild, disabled: buildState.status === 'building' },
+        { id: 'log', label: showLog ? 'Hide Log' : 'Show Log', action: () => showLog = !showLog }
+      ]
+    }
+  ]);
 </script>
 
 <div class="app">
-  <header class="titlebar" data-tauri-drag-region>
-    <div class="titlebar-left">
-      <div class="toolbar-buttons">
-        <button onclick={handleOpen}>Open</button>
-        <button onclick={handleSave} disabled={!fileState.dirty}>Save</button>
-        <button onclick={handleBuild} disabled={buildState.status === 'building'}>
-          {buildState.status === 'building' ? 'Building...' : 'Build'}
-        </button>
-        <button onclick={() => showLog = !showLog} class:active={showLog}>Log</button>
-      </div>
-    </div>
-    <div class="titlebar-center">
-      {#if fileState.path}
-        <span class="filename" class:dirty={fileState.dirty}>
-          {fileState.path.split('/').pop()}
-          {fileState.dirty ? ' •' : ''}
-        </span>
-      {:else}
-        <span class="filename">Untitled</span>
-      {/if}
-    </div>
-    <div class="titlebar-right">
-      <span class="status" class:building={buildState.status === 'building'} class:success={buildState.status === 'success'} class:error={buildState.status === 'error'}>
-        {buildState.status === 'idle' ? '' : buildState.status === 'building' ? 'Building...' : buildState.status === 'success' ? 'Built' : 'Error'}
-      </span>
-      <button class="window-btn" onclick={minimizeWindow} aria-label="Minimize">
-        <svg width="12" height="fill" viewBox="0 0 12 12"><rect y="5" width="12" height="2" fill="currentColor"/></svg>
-      </button>
-      <button class="window-btn" onclick={toggleMaximize} aria-label="Maximize">
-        <svg width="12" height="fill" viewBox="0 0 12 12"><rect x="1" y="1" width="10" height="10" stroke="currentColor" stroke-width="2" fill="none"/></svg>
-      </button>
-      <button class="window-btn close" onclick={closeWindow} aria-label="Close">
-        <svg width="12" height="fill" viewBox="0 0 12 12"><path d="M1 1L11 11M11 1L1 11" stroke="currentColor" stroke-width="2"/></svg>
-      </button>
-    </div>
-  </header>
+  <TabBar {tabs} {fileState} {buildState} isRawMode={rawMode} onToggleRawMode={handleToggleRawMode} />
 
   <main class="main">
     <Splitpanes horizontal={showLog}>
@@ -160,7 +223,7 @@
       </Pane>
       {#if showLog}
         <Pane size={30}>
-          <divALE, a latex editor class="log-panel" bind:this={logContainer}>
+          <div class="log-panel" bind:this={logContainer}>
             {#if buildState.logs.length === 0}
               <div class="log-empty">No build output</div>
             {:else}
@@ -199,117 +262,6 @@
     background: #fff;
   }
 
-  .titlebar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    height: 40px;
-    background: #323233;
-    color: #fff;
-    padding: 0 8px;
-    -webkit-app-region: drag;
-    user-select: none;
-  }
-
-  .titlebar-left {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    -webkit-app-region: no-drag;
-  }
-
-  .app-title {
-    font-weight: 600;
-    font-size: 13px;
-    padding-left: 4px;
-  }
-
-  .toolbar-buttons {
-    display: flex;
-    gap: 4px;
-  }
-
-  .titlebar-center {
-    flex: 1;
-    text-align: center;
-    -webkit-app-region: drag;
-  }
-
-  .filename {
-    font-size: 13px;
-    opacity: 0.9;
-  }
-
-  .filename.dirty {
-    color: #e67e22;
-  }
-
-  .titlebar-right {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    -webkit-app-region: no-drag;
-  }
-
-  .status {
-    font-size: 11px;
-    padding: 2px 8px;
-    border-radius: 4px;
-    background: #555;
-  }
-
-  .status.building { background: #f39c12; }
-  .status.success { background: #27ae60; }
-  .status.error { background: #e74c3c; }
-
-  .titlebar button {
-    padding: 4px 10px;
-    border: none;
-    background: transparent;
-    color: #ccc;
-    border-radius: 3px;
-    cursor: pointer;
-    font-size: 12px;
-  }
-
-  .titlebar button:hover:not(:disabled) {
-    background: #454545;
-    color: #fff;
-  }
-
-  .titlebar button:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-
-  .titlebar button.active {
-    background: #0078d4;
-    color: white;
-  }
-
-  .window-btn {
-    width: 32px;
-    height: 28px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border: none !important;
-    background: transparent !important;
-    color: #ccc !important;
-    border-radius: 0 !important;
-    padding: 0 !important;
-  }
-
-  .window-btn:hover {
-    background: #454545 !important;
-    color: #fff !important;
-  }
-
-  .window-btn.close:hover {
-    background: #e81123 !important;
-    color: #fff !important;
-  }
-
   .main {
     flex: 1;
     overflow: hidden;
@@ -317,6 +269,7 @@
 
   .log-panel {
     height: 100%;
+    max-height: 160px;
     overflow: auto;
     background: #1e1e1e;
     color: #d4d4d4;

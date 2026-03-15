@@ -38,8 +38,7 @@
     ></iframe>
   {:else}
     <div class="placeholder">
-      <p>No PDF to display</p>
-      <p class="hint">Open a .tex file and build to see the preview</p>
+      <p>No PDF yet — hit Build PDF to compile.</p>
     </div>
   {/if}
 </div>
@@ -71,10 +70,5 @@
 
   .placeholder p {
     margin: 8px 0;
-  }
-
-  .hint {
-    font-size: 12px;
-    color: #999;
   }
 </style>

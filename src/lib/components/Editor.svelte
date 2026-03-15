@@ -7,6 +7,8 @@
   import { tags as t } from '@lezer/highlight';
   import katex from 'katex';
   import 'katex/dist/katex.min.css';
+  import { snippetKeymap } from '../snippetExpansion';
+  import { createDecorationPlugin, setRefreshFn } from '../latexDecorations';
 
   export let content: string = '';
   export let onchange: ((content: string) => void) | undefined = undefined;
@@ -32,29 +34,6 @@
     { tag: t.string, color: '#219' },
   ]);
 
-  class EnumerateItemWidget extends WidgetType {
-    toDOM(): HTMLElement {
-      const wrap = document.createElement('span');
-      wrap.className = 'cm-enumerate-item';
-      wrap.textContent = this.num + '. ';
-      wrap.style.color = '#2563eb';
-      wrap.style.fontWeight = '600';
-      return wrap;
-    }
-    num = 0;
-  }
-
-  class ItemizeItemWidget extends WidgetType {
-    toDOM(): HTMLElement {
-      const wrap = document.createElement('span');
-      wrap.className = 'cm-itemize-item';
-      wrap.textContent = '• ';
-      wrap.style.color = '#dc2626';
-      wrap.style.fontWeight = '600';
-      return wrap;
-    }
-  }
-
   class LatexMathWidget extends WidgetType {
     toDOM(): HTMLElement {
       const wrap = document.createElement('span');
@@ -73,66 +52,6 @@
     }
     tex = '';
     displayMode = false;
-  }
-
-  function createEnumeratePlugin() {
-    const enumerateMatcher = new MatchDecorator({
-      regexp: /\\begin\{enumerate\}([\s\S]*?)\\item[^\n]*/g,
-      decoration: (match: RegExpExecArray): any => {
-        const text = match[0];
-        const itemMatch = text.match(/\\item/g);
-        const count = itemMatch ? itemMatch.length : 1;
-        const decorations: any[] = [];
-        
-        for (let i = 0; i < count; i++) {
-          const widget = new EnumerateItemWidget();
-          widget.num = i + 1;
-          decorations.push(Decoration.widget({ widget, side: 1 }));
-        }
-        return Decoration.set(decorations);
-      }
-    });
-    
-    return ViewPlugin.fromClass(class {
-      decorations: any;
-      constructor(view: EditorView) {
-        this.decorations = enumerateMatcher.createDeco(view);
-      }
-      update(update: any) {
-        this.decorations = enumerateMatcher.updateDeco(update, this.decorations);
-      }
-    }, {
-      decorations: (v: any) => v.decorations
-    });
-  }
-
-  function createItemizePlugin() {
-    const itemizeMatcher = new MatchDecorator({
-      regexp: /\\begin\{itemize\}([\s\S]*?)\\item[^\n]*/g,
-      decoration: (match: RegExpExecArray): any => {
-        const text = match[0];
-        const itemMatch = text.match(/\\item/g);
-        const count = itemMatch ? itemMatch.length : 1;
-        const decorations: any[] = [];
-        
-        for (let i = 0; i < count; i++) {
-          decorations.push(Decoration.widget({ widget: new ItemizeItemWidget(), side: 1 }));
-        }
-        return Decoration.set(decorations);
-      }
-    });
-    
-    return ViewPlugin.fromClass(class {
-      decorations: any;
-      constructor(view: EditorView) {
-        this.decorations = itemizeMatcher.createDeco(view);
-      }
-      update(update: any) {
-        this.decorations = itemizeMatcher.updateDeco(update, this.decorations);
-      }
-    }, {
-      decorations: (v: any) => v.decorations
-    });
   }
 
   function createMathInlinePlugin() {
@@ -207,12 +126,12 @@
         history(),
         drawSelection(),
         highlightActiveLine(),
+        snippetKeymap,
         keymap.of([...defaultKeymap, ...historyKeymap]),
         latexLanguage,
         syntaxHighlighting(latexHighlight),
         editorTheme,
-        createEnumeratePlugin(),
-        createItemizePlugin(),
+        createDecorationPlugin(),
         createMathInlinePlugin(),
         createMathDisplayPlugin(),
         EditorView.updateListener.of((update) => {
@@ -224,6 +143,12 @@
     });
 
     view = new EditorView({ state: startState, parent: editorContainer });
+    
+    setRefreshFn(() => {
+      if (view) {
+        view.dispatch({ effects: [] });
+      }
+    });
   });
 
   onDestroy(() => { view?.destroy(); });
@@ -239,6 +164,28 @@
 
   export function getContent(): string {
     return view ? view.state.doc.toString() : content;
+  }
+
+  export function insertText(text: string) {
+    if (view) {
+      const pos = view.state.selection.main.head;
+      view.dispatch({ 
+        changes: { from: pos, to: pos, insert: text },
+        selection: { anchor: pos + text.length }
+      });
+    }
+  }
+
+  export function undo() {
+    if (view) {
+      view.dispatch({ userEvent: 'undo' });
+    }
+  }
+
+  export function redo() {
+    if (view) {
+      view.dispatch({ userEvent: 'redo' });
+    }
   }
 </script>
 
