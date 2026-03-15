@@ -17,9 +17,10 @@
     buildState: BuildState;
     onToggleRawMode?: () => void;
     isRawMode?: boolean;
+    onOpenSettings?: () => void;
   }
 
-  let { tabs, fileState, buildState, onToggleRawMode, isRawMode = false }: Props = $props();
+  let { tabs, fileState, buildState, onToggleRawMode, isRawMode = false, onOpenSettings }: Props = $props();
 
   let activeTab: string | null = $state(null);
   let popupRef: HTMLDivElement;
@@ -106,6 +107,13 @@
     >
       RAW
     </button>
+    <button 
+      class="icon-btn settings-btn" 
+      onclick={onOpenSettings}
+      title="Settings"
+    >
+      ⚙
+    </button>
   </div>
 </div>
 
@@ -113,8 +121,8 @@
   .toolbar {
     display: flex;
     align-items: center;
-    background: #f0f0f0;
-    border-bottom: 1px solid #ccc;
+    background: var(--secondary);
+    border-bottom: 1px solid var(--primary);
     padding: 0 12px;
     height: 38px;
     position: relative;
@@ -135,15 +143,15 @@
     background: transparent;
     cursor: pointer;
     font-size: 13px;
-    color: #333;
+    color: var(--text);
   }
 
   .tab:hover {
-    background: #e8e8e8;
+    background: var(--primary);
   }
 
   .tab.active {
-    background: #fff;
+    background: var(--primary);
     font-weight: 500;
   }
 
@@ -156,11 +164,11 @@
   .filename {
     font-family: 'JetBrains Mono', 'Fira Code', monospace;
     font-size: 13px;
-    color: #333;
+    color: var(--text);
   }
 
   .filename.dirty {
-    color: #e67e22;
+    color: var(--accent);
   }
 
   .toolbar-right {
@@ -181,31 +189,49 @@
 
   .raw-toggle {
     padding: 2px 6px;
-    border: 1px solid #ccc;
+    border: 1px solid var(--primary);
     border-radius: 3px;
-    background: #fff;
-    color: #666;
+    background: var(--primary);
+    color: var(--text);
     font-size: 10px;
     font-weight: 600;
     cursor: pointer;
   }
 
   .raw-toggle:hover {
-    background: #e8e8e8;
+    background: var(--secondary);
   }
 
   .raw-toggle.active {
-    background: #e74c3c;
+    background: var(--accent);
     color: white;
-    border-color: #e74c3c;
+    border-color: var(--accent);
+  }
+
+  .icon-btn {
+    width: 24px;
+    height: 24px;
+    border: none;
+    border-radius: 3px;
+    background: transparent;
+    color: var(--text);
+    font-size: 14px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .icon-btn:hover {
+    background: var(--secondary);
   }
 
   .popup {
     position: absolute;
     top: 100%;
     left: 0;
-    background: #fff;
-    border: 1px solid #ccc;
+    background: var(--primary);
+    border: 1px solid var(--secondary);
     border-radius: 4px;
     box-shadow: 0 4px 12px rgba(0,0,0,0.15);
     padding: 8px;
@@ -232,7 +258,7 @@
   }
 
   .action-btn:hover:not(:disabled) {
-    background: #e8e8e8;
+    background: var(--secondary);
   }
 
   .action-btn:disabled {
@@ -242,12 +268,13 @@
 
   .action-label {
     font-size: 12px;
-    color: #333;
+    color: var(--text);
   }
 
   .action-shortcut {
     font-size: 10px;
-    color: #888;
+    color: var(--text);
+    opacity: 0.7;
     margin-left: 16px;
   }
 </style>

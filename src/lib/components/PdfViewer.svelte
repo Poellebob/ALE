@@ -47,7 +47,7 @@
   .pdf-viewer {
     width: 100%;
     height: 100%;
-    background: #f5f5f5;
+    background: var(--background);
     display: flex;
     flex-direction: column;
   }
@@ -56,7 +56,7 @@
     width: 100%;
     height: 100%;
     border: none;
-    background: white;
+    background: var(--primary);
   }
 
   .placeholder {
@@ -65,7 +65,8 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    color: #666;
+    color: var(--text);
+    opacity: 0.7;
   }
 
   .placeholder p {

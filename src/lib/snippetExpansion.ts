@@ -10,16 +10,16 @@ interface TabStop {
 function findTrigger(state: EditorState): { trigger: string; start: number } | null {
   const pos = state.selection.main.head;
   const line = state.doc.lineAt(pos);
-  
-  const lineStart = line.from;
-  const lineEnd = line.from + line.length;
-  const text = line.text;
-  
-  if (pos === lineEnd) {
-    for (const snippet of snippets) {
-      if (text === snippet.trigger) {
-        return { trigger: snippet.trigger, start: lineStart };
-      }
+  const text = line.text.slice(0, pos - line.from); // Text from line start to cursor
+
+  for (const snippet of snippets) {
+    // Check if the snippet trigger exists at the end of the current line's text before the cursor
+    const triggerRegex = new RegExp(`(^|\\s)${snippet.trigger}$`);
+    const match = text.match(triggerRegex);
+
+    if (match) {
+      const start = line.from + text.lastIndexOf(snippet.trigger);
+      return { trigger: snippet.trigger, start: start };
     }
   }
   

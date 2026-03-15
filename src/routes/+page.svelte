@@ -4,39 +4,79 @@
   import { listen } from '@tauri-apps/api/event';
   import { open, save } from '@tauri-apps/plugin-dialog';
   import { onMount, onDestroy } from 'svelte';
+  import { get } from 'svelte/store';
   import Editor from '$lib/components/Editor.svelte';
   import PdfViewer from '$lib/components/PdfViewer.svelte';
   import TabBar from '$lib/components/TabBar.svelte';
-  import { fileStore, buildStore, type BuildLogEntry } from '$lib/stores';
+  import SettingsModal from '$lib/components/SettingsModal.svelte';
+  import { fileStore, buildStore, settingsStore, type BuildLogEntry, type Settings } from '$lib/stores';
+  import { themes } from '$lib/themes';
   import type { Tab } from '$lib/tabs/definitions';
   import { snippets } from '$lib/snippets';
   import { toggleRawMode, isRawMode, refreshDecorations } from '$lib/latexDecorations';
+
+  let themeCss = $state('');
+  let darkMatcher: MediaQueryList | undefined;
+
+  function updateTheme(settingsValue: Settings) {
+    let themeName = settingsValue.theme;
+    if (themeName === 'system') {
+      themeName = darkMatcher?.matches ? 'dark' : 'light';
+    }
+
+    const theme = themes[themeName];
+    if (theme) {
+      const css = `
+:root {
+  --primary: ${theme.colors.primary};
+  --secondary: ${theme.colors.secondary};
+  --accent: ${theme.colors.accent};
+  --background: ${theme.colors.background};
+  --text: ${theme.colors.text};
+  --editor-background: ${theme.colors.editor.background};
+  --editor-text: ${theme.colors.editor.text};
+  --editor-selection: ${theme.colors.editor.selection};
+  --editor-cursor: ${theme.colors.editor.cursor};
+}
+      `;
+      themeCss = css;
+    }
+  }
+
+  settingsStore.subscribe(updateTheme);
 
   let editorComponent: Editor;
   let showLog = $state(false);
   let logContainer: HTMLDivElement;
   let rawMode = $state(false);
+  let showSettings = $state(false);
 
-  let fileState = $state({ path: null as string | null, content: '', dirty: false });
-  let buildState = $state({ status: 'idle' as 'idle' | 'building' | 'success' | 'error', logs: [] as BuildLogEntry[], pdfPath: null as string | null, error: null as string | null });
-
-  const unsubFile = fileStore.subscribe(s => { fileState = s; });
-  const unsubBuild = buildStore.subscribe(s => { buildState = s; });
+  let fileState = $derived($fileStore);
+  let buildState = $derived($buildStore);
 
   let unlisten: (() => void) | null = null;
+  let themeUnsub: (() => void) | null = null;
 
   onMount(async () => {
     unlisten = await listen<{ line: string; stream: string }>('build-log', (event) => {
       buildStore.addLog(event.payload.line, event.payload.stream as 'stdout' | 'stderr');
     });
 
+    darkMatcher = window.matchMedia('(prefers-color-scheme: dark)');
+    const onThemeChange = () => updateTheme(get(settingsStore));
+    darkMatcher.addEventListener('change', onThemeChange);
+    
+    themeUnsub = () => {
+      darkMatcher?.removeEventListener('change', onThemeChange);
+    };
+
+    updateTheme(get(settingsStore));
     window.addEventListener('keydown', handleKeydown);
   });
 
   onDestroy(() => {
     if (unlisten) unlisten();
-    unsubFile();
-    unsubBuild();
+    if (themeUnsub) themeUnsub();
     window.removeEventListener('keydown', handleKeydown);
   });
 
@@ -58,6 +98,9 @@
       } else if (e.key === 'o') {
         e.preventDefault();
         handleOpen();
+      } else if (e.key === ',') {
+        e.preventDefault();
+        showSettings = true;
       }
     }
   }
@@ -123,17 +166,6 @@
     fileStore.setContent(content);
   }
 
-  function handleInsert(snippetId: string) {
-    const snippet = snippets.find(s => s.trigger === snippetId);
-    if (snippet && editorComponent) {
-      const expansion = snippet.expansion
-        .replace(/\$0/g, '')
-        .replace(/\$[1-9]/g, '');
-      
-      editorComponent.insertText(expansion);
-    }
-  }
-
   function handleUndo() {
     if (editorComponent) editorComponent.undo();
   }
@@ -142,16 +174,35 @@
     if (editorComponent) editorComponent.redo();
   }
 
-  function handleCut() {
-    document.execCommand('cut');
+  async function handleCut() {
+    if (!editorComponent) return;
+    try {
+      const selectedText = editorComponent.getSelectedText();
+      await navigator.clipboard.writeText(selectedText);
+      editorComponent.deleteSelectedText();
+    } catch (err) {
+      console.error('Failed to cut:', err);
+    }
   }
 
-  function handleCopy() {
-    document.execCommand('copy');
+  async function handleCopy() {
+    if (!editorComponent) return;
+    try {
+      const selectedText = editorComponent.getSelectedText();
+      await navigator.clipboard.writeText(selectedText);
+    } catch (err) {
+      console.error('Failed to copy:', err);
+    }
   }
 
-  function handlePaste() {
-    document.execCommand('paste');
+  async function handlePaste() {
+    if (!editorComponent) return;
+    try {
+      const text = await navigator.clipboard.readText();
+      editorComponent.insertSnippet(text);
+    } catch (err) {
+      console.error('Failed to paste:', err);
+    }
   }
 
   const tabs: Tab[] = $derived([
@@ -180,15 +231,15 @@
       id: 'insert',
       label: 'Insert',
       actions: [
-        { id: 'section', label: 'Section', action: () => handleInsert('sec') },
-        { id: 'subsection', label: 'Subsection', action: () => handleInsert('ssec') },
-        { id: 'figure', label: 'Figure', action: () => handleInsert('fig') },
-        { id: 'table', label: 'Table', action: () => handleInsert('tab') },
-        { id: 'reference', label: 'Reference', action: () => handleInsert('ref') },
-        { id: 'citation', label: 'Citation', action: () => handleInsert('cite') },
-        { id: 'itemize', label: 'Itemize', action: () => handleInsert('-') },
-        { id: 'enumerate', label: 'Enumerate', action: () => handleInsert('1.') },
-        { id: 'math', label: 'Math', action: () => handleInsert('$$') }
+        { id: 'section', label: 'Section', action: () => editorComponent.insertSnippet(snippets.find(s => s.trigger === 'sec')!.expansion) },
+        { id: 'subsection', label: 'Subsection', action: () => editorComponent.insertSnippet(snippets.find(s => s.trigger === 'ssec')!.expansion) },
+        { id: 'figure', label: 'Figure', action: () => editorComponent.insertSnippet(snippets.find(s => s.trigger === 'fig')!.expansion) },
+        { id: 'table', label: 'Table', action: () => editorComponent.insertSnippet(snippets.find(s => s.trigger === 'tab')!.expansion) },
+        { id: 'reference', label: 'Reference', action: () => editorComponent.insertSnippet(snippets.find(s => s.trigger === 'ref')!.expansion) },
+        { id: 'citation', label: 'Citation', action: () => editorComponent.insertSnippet(snippets.find(s => s.trigger === 'cite')!.expansion) },
+        { id: 'itemize', label: 'Itemize', action: () => editorComponent.insertSnippet(snippets.find(s => s.trigger === '-')!.expansion) },
+        { id: 'enumerate', label: 'Enumerate', action: () => editorComponent.insertSnippet(snippets.find(s => s.trigger === '1.')!.expansion) },
+        { id: 'math', label: 'Math', action: () => editorComponent.insertSnippet(snippets.find(s => s.trigger === '$$')!.expansion) }
       ]
     },
     {
@@ -202,8 +253,12 @@
   ]);
 </script>
 
+<svelte:head>
+  <style>{themeCss}</style>
+</svelte:head>
+
 <div class="app">
-  <TabBar {tabs} {fileState} {buildState} isRawMode={rawMode} onToggleRawMode={handleToggleRawMode} />
+  <TabBar {tabs} {fileState} {buildState} isRawMode={rawMode} onToggleRawMode={handleToggleRawMode} onOpenSettings={() => showSettings = true} />
 
   <main class="main">
     <Splitpanes horizontal={showLog}>
@@ -241,6 +296,8 @@
       {/if}
     </Splitpanes>
   </main>
+  
+  <SettingsModal open={showSettings} onClose={() => showSettings = false} />
 </div>
 
 <style>
@@ -253,13 +310,15 @@
   :global(body) {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     overflow: hidden;
+    background-color: var(--background);
+    color: var(--text);
   }
 
   .app {
     display: flex;
     flex-direction: column;
     height: 100vh;
-    background: #fff;
+    background: var(--background);
   }
 
   .main {
@@ -271,8 +330,8 @@
     height: 100%;
     max-height: 160px;
     overflow: auto;
-    background: #1e1e1e;
-    color: #d4d4d4;
+    background: var(--editor-background);
+    color: var(--editor-text);
     font-family: 'JetBrains Mono', 'Fira Code', monospace;
     font-size: 12px;
     padding: 8px;
@@ -307,7 +366,7 @@
   }
 
   :global(.splitpanes__splitter) {
-    background: #ddd;
+    background: var(--secondary);
     position: relative;
   }
 
@@ -317,7 +376,7 @@
     left: 0;
     top: 0;
     transition: opacity 0.4s;
-    background-color: #3498db;
+    background-color: var(--accent);
     opacity: 0;
     z-index: 1;
   }

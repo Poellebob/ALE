@@ -1,14 +1,9 @@
-import { EditorView, Decoration, WidgetType, MatchDecorator, ViewPlugin, type DecorationSet } from '@codemirror/view';
+import { EditorView, Decoration, WidgetType, ViewPlugin, keymap } from '@codemirror/view';
 import { EditorState, RangeSetBuilder, type RangeSet } from '@codemirror/state';
 import katex from 'katex';
 import 'katex/dist/katex.min.css';
 
 export type DecorationClass = 'A' | 'B';
-
-export interface DecorationConfig {
-  class: DecorationClass;
-  pattern: RegExp;
-}
 
 export abstract class LatexDecoration {
   abstract class: DecorationClass;
@@ -21,106 +16,43 @@ export abstract class LatexDecoration {
   }
   
   handleBackspace?(view: EditorView, pos: number): boolean;
+  
+  enabled?(): boolean;
 }
 
-export class ItemizeDecoration extends LatexDecoration {
-  class: DecorationClass = 'B';
-  pattern = /\\item\s+/g;
-  
-  getRawText(match: RegExpExecArray): string {
-    return match[0];
-  }
-  
-  render(match: RegExpExecArray): HTMLElement {
-    const wrap = document.createElement('span');
-    wrap.className = 'cm-itemize';
-    wrap.textContent = '• ';
-    wrap.style.color = '#dc2626';
-    wrap.style.fontWeight = '600';
-    return wrap;
-  }
-  
-  handleBackspace(view: EditorView, pos: number): boolean {
-    const line = view.state.doc.lineAt(pos);
-    const lineText = line.text;
-    
-    if (lineText.match(/^(\s*)•/)) {
-      const match = lineText.match(/^(\s*)•\s*(.*)$/);
-      if (match) {
-        const [, indent, content] = match;
-        const newText = indent + (content || '');
-        view.dispatch({
-          changes: { from: line.from, to: line.to, insert: newText }
-        });
-        return true;
-      }
-    }
-    return false;
-  }
+let rawMode = false;
+
+export function toggleRawMode(): boolean {
+  rawMode = !rawMode;
+  return rawMode;
 }
 
-export class EnumerateDecoration extends LatexDecoration {
-  class: DecorationClass = 'B';
-  pattern = /\\item\s+/g;
-  
-  private getItemNumber(match: RegExpExecArray): number {
-    const beforeMatch = match.input.slice(0, match.index);
-    const itemCount = (beforeMatch.match(/\\item\s+/g) || []).length;
-    return itemCount + 1;
-  }
-  
-  getRawText(match: RegExpExecArray): string {
-    return match[0];
-  }
-  
-  render(match: RegExpExecArray): HTMLElement {
-    const wrap = document.createElement('span');
-    wrap.className = 'cm-enumerate';
-    const num = this.getItemNumber(match);
-    wrap.textContent = `${num}. `;
-    wrap.style.color = '#2563eb';
-    wrap.style.fontWeight = '600';
-    return wrap;
-  }
-  
-  handleBackspace(view: EditorView, pos: number): boolean {
-    const line = view.state.doc.lineAt(pos);
-    const lineText = line.text;
-    
-    if (lineText.match(/^(\s*)\d+\./)) {
-      const match = lineText.match(/^(\s*)(\d+)\.\s*(.*)$/);
-      if (match) {
-        const [, indent, num, content] = match;
-        const newText = indent + (content || '');
-        view.dispatch({
-          changes: { from: line.from, to: line.to, insert: newText }
-        });
-        return true;
-      }
-    }
-    return false;
-  }
+export function isRawMode(): boolean {
+  return rawMode;
+}
+
+let renderSettings = { math: true, formatting: true, headings: true };
+
+export function setRenderSettings(math: boolean, formatting: boolean, headings: boolean) {
+  renderSettings = { math, formatting, headings };
 }
 
 export class InlineMathDecoration extends LatexDecoration {
   class: DecorationClass = 'A';
-  pattern = /\$([^\n$]+)\$/g;
+  pattern = /\$([^$\n]+)\$/g;
   
-  getRawText(match: RegExpExecArray): string {
-    return match[0];
-  }
+  enabled(): boolean { return renderSettings.math; }
+  
+  getRawText(match: RegExpExecArray): string { return match[0]; }
   
   render(match: RegExpExecArray): HTMLElement {
     const wrap = document.createElement('span');
     wrap.className = 'cm-math-inline';
     const tex = match[1];
     try {
-      wrap.innerHTML = '$' + katex.renderToString(tex, {
-        displayMode: false,
-        throwOnError: false,
-        output: 'html'
-      }) + '$';
-    } catch {
+      wrap.innerHTML = '$' + katex.renderToString(tex, { displayMode: false, throwOnError: true, output: 'html' }) + '$';
+    } catch (error) {
+      console.error('KaTeX inline math parsing error:', error, 'for:', tex);
       wrap.textContent = match[0];
     }
     return wrap;
@@ -133,23 +65,20 @@ export class InlineMathDecoration extends LatexDecoration {
 
 export class DisplayMathDecoration extends LatexDecoration {
   class: DecorationClass = 'A';
-  pattern = /\$\$([^\n$]+)\$\$/g;
+  pattern = /\$\$([^$]+)\$\$/g;
   
-  getRawText(match: RegExpExecArray): string {
-    return match[0];
-  }
+  enabled(): boolean { return renderSettings.math; }
+  
+  getRawText(match: RegExpExecArray): string { return match[0]; }
   
   render(match: RegExpExecArray): HTMLElement {
     const wrap = document.createElement('div');
     wrap.className = 'cm-math-display';
     const tex = match[1];
     try {
-      wrap.innerHTML = '$$' + katex.renderToString(tex, {
-        displayMode: true,
-        throwOnError: false,
-        output: 'html'
-      }) + '$$';
-    } catch {
+      wrap.innerHTML = '$$' + katex.renderToString(tex, { displayMode: true, throwOnError: true, output: 'html' }) + '$$';
+    } catch (error) {
+      console.error('KaTeX display math parsing error:', error, 'for:', tex);
       wrap.textContent = match[0];
     }
     return wrap;
@@ -160,27 +89,190 @@ export class DisplayMathDecoration extends LatexDecoration {
   }
 }
 
-let rawMode = false;
-
-export function setRawMode(enabled: boolean) {
-  rawMode = enabled;
+export class BoldDecoration extends LatexDecoration {
+  class: DecorationClass = 'A';
+  pattern = /\\textbf\{([^}]+)\}/g;
+  
+  enabled(): boolean { return renderSettings.formatting; }
+  
+  getRawText(match: RegExpExecArray): string { return match[0]; }
+  
+  render(match: RegExpExecArray): HTMLElement {
+    const wrap = document.createElement('span');
+    wrap.className = 'cm-bold';
+    wrap.textContent = match[1];
+    wrap.style.fontWeight = 'bold';
+    return wrap;
+  }
+  
+  isCollapsed(state: EditorState, from: number, to: number): boolean {
+    return state.selection.main.head > from && state.selection.main.head < to;
+  }
 }
 
-export function isRawMode(): boolean {
-  return rawMode;
+export class ItalicDecoration extends LatexDecoration {
+  class: DecorationClass = 'A';
+  pattern = /\\textit\{([^}]+)\}|\\emph\{([^}]+)\}/g;
+  
+  enabled(): boolean { return renderSettings.formatting; }
+  
+  getRawText(match: RegExpExecArray): string { return match[0]; }
+  
+  render(match: RegExpExecArray): HTMLElement {
+    const wrap = document.createElement('span');
+    wrap.className = 'cm-italic';
+    wrap.textContent = match[1] || match[2];
+    wrap.style.fontStyle = 'italic';
+    return wrap;
+  }
+  
+  isCollapsed(state: EditorState, from: number, to: number): boolean {
+    return state.selection.main.head > from && state.selection.main.head < to;
+  }
 }
 
-export function toggleRawMode(): boolean {
-  rawMode = !rawMode;
-  return rawMode;
+export class SectionDecoration extends LatexDecoration {
+  class: DecorationClass = 'A';
+  pattern = /\\section\{([^}]+)\}/g;
+  
+  enabled(): boolean { return renderSettings.headings; }
+  
+  getRawText(match: RegExpExecArray): string { return match[0]; }
+  
+  render(match: RegExpExecArray): HTMLElement {
+    const wrap = document.createElement('div');
+    wrap.className = 'cm-heading cm-section';
+    wrap.textContent = match[1];
+    wrap.style.fontSize = '1.4em';
+    wrap.style.fontWeight = 'bold';
+    wrap.style.marginTop = '1em';
+    return wrap;
+  }
+  
+  isCollapsed(state: EditorState, from: number, to: number): boolean {
+    return state.selection.main.head > from && state.selection.main.head < to;
+  }
+}
+
+export class SubsectionDecoration extends LatexDecoration {
+  class: DecorationClass = 'A';
+  pattern = /\\subsection\{([^}]+)\}/g;
+  
+  enabled(): boolean { return renderSettings.headings; }
+  
+  getRawText(match: RegExpExecArray): string { return match[0]; }
+  
+  render(match: RegExpExecArray): HTMLElement {
+    const wrap = document.createElement('div');
+    wrap.className = 'cm-heading cm-subsection';
+    wrap.textContent = match[1];
+    wrap.style.fontSize = '1.2em';
+    wrap.style.fontWeight = 'bold';
+    wrap.style.marginTop = '0.8em';
+    return wrap;
+  }
+  
+  isCollapsed(state: EditorState, from: number, to: number): boolean {
+    return state.selection.main.head > from && state.selection.main.head < to;
+  }
+}
+
+export class SubsubsectionDecoration extends LatexDecoration {
+  class: DecorationClass = 'A';
+  pattern = /\\subsubsection\{([^}]+)\}/g;
+  
+  enabled(): boolean { return renderSettings.headings; }
+  
+  getRawText(match: RegExpExecArray): string { return match[0]; }
+  
+  render(match: RegExpExecArray): HTMLElement {
+    const wrap = document.createElement('div');
+    wrap.className = 'cm-heading cm-subsubsection';
+    wrap.textContent = match[1];
+    wrap.style.fontSize = '1.1em';
+    wrap.style.fontWeight = 'bold';
+    wrap.style.marginTop = '0.6em';
+    return wrap;
+  }
+  
+  isCollapsed(state: EditorState, from: number, to: number): boolean {
+    return state.selection.main.head > from && state.selection.main.head < to;
+  }
+}
+
+function findListType(doc: string, itemPos: number): 'itemize' | 'enumerate' | null {
+  const before = doc.slice(0, itemPos);
+  const itemizeMatch = before.match(/\\begin\{itemize\}/);
+  const enumerateMatch = before.match(/\\begin\{enumerate\}/);
+  
+  if (!itemizeMatch && !enumerateMatch) return null;
+  if (!itemizeMatch) return 'enumerate';
+  if (!enumerateMatch) return 'itemize';
+  
+  return itemizeMatch.index! > enumerateMatch.index! ? 'itemize' : 'enumerate';
+}
+
+export class ListItemDecoration extends LatexDecoration {
+  class: DecorationClass = 'B';
+  pattern = /\\item\s+/g;
+  
+  getRawText(match: RegExpExecArray): string { return match[0]; }
+  
+  render(match: RegExpExecArray): HTMLElement {
+    const doc = match.input;
+    const itemPos = match.index!;
+    const listType = findListType(doc, itemPos);
+    
+    const wrap = document.createElement('span');
+    wrap.className = 'cm-list-item';
+    
+    if (listType === 'enumerate') {
+      const beforeMatch = doc.slice(0, itemPos);
+      const itemCount = (beforeMatch.match(/\\item\s+/g) || []).length;
+      wrap.textContent = `${itemCount + 1}. `;
+      wrap.style.color = '#2563eb';
+    } else {
+      wrap.textContent = '• ';
+      wrap.style.color = '#dc2626';
+    }
+    wrap.style.fontWeight = '600';
+    return wrap;
+  }
+  
+  handleBackspace(view: EditorView, pos: number): boolean {
+    const line = view.state.doc.lineAt(pos);
+    const lineText = line.text;
+    
+    if (lineText.match(/^(\s*)(•|\d+\.)\s*/)) {
+      const match = lineText.match(/^(\s*)(•|\d+\.)\s*(.*)$/);
+      if (match) {
+        const [, indent, , content] = match;
+        const newText = indent + (content || '');
+        view.dispatch({ changes: { from: line.from, to: line.to, insert: newText } });
+        return true;
+      }
+    }
+    return false;
+  }
 }
 
 export const decorations: LatexDecoration[] = [
-  new ItemizeDecoration(),
-  new EnumerateDecoration(),
   new InlineMathDecoration(),
   new DisplayMathDecoration(),
+  new BoldDecoration(),
+  new ItalicDecoration(),
+  new SectionDecoration(),
+  new SubsectionDecoration(),
+  new SubsubsectionDecoration(),
+  new ListItemDecoration(),
 ];
+
+interface DecorationRange {
+  from: number;
+  to: number;
+  deco: LatexDecoration;
+  match: RegExpExecArray;
+}
 
 export function createDecorationPlugin() {
   return ViewPlugin.fromClass(class {
@@ -200,25 +292,39 @@ export function createDecorationPlugin() {
       const builder = new RangeSetBuilder<Decoration>();
       const doc = view.state.doc.toString();
       
-      for (const deco of decorations) {
-        const regex = new RegExp(deco.pattern.source, 'g');
-        let match;
-        
-        while ((match = regex.exec(doc)) !== null) {
-          const from = match.index;
-          const to = from + match[0].length;
-          
+      const ranges: DecorationRange[] = [];
+      
+              for (const deco of decorations) {
+                if (deco.enabled && !deco.enabled()) continue;
+                
+                deco.pattern.lastIndex = 0; // Reset regex for consistent iteration
+                let match;
+                
+                while ((match = deco.pattern.exec(doc)) !== null) {
+                  const from = match.index;
+                  const to = from + match[0].length;          
           const shouldShowRaw = rawMode || 
             (deco.class === 'A' && deco.isCollapsed(view.state, from, to));
           
           if (!shouldShowRaw) {
-            const widget = new class extends WidgetType {
-              toDOM(): HTMLElement {
-                return deco.render(match);
-              }
-            };
-            builder.add(from, to, Decoration.widget({ widget: new widget(), side: 1 }));
+            ranges.push({ from, to, deco, match });
           }
+        }
+      }
+      
+      ranges.sort((a, b) => a.from - b.from);
+      
+      for (const range of ranges) {
+        const widget = new class extends WidgetType {
+          toDOM(): HTMLElement { return range.deco.render(range.match); }
+        };
+        
+        const deco = Decoration.replace({ widget });
+        
+        if (range.deco.class === 'B') {
+          builder.add(range.from, range.from + 1, deco);
+        } else {
+          builder.add(range.from, range.to, deco);
         }
       }
       
@@ -229,27 +335,19 @@ export function createDecorationPlugin() {
   });
 }
 
-export function createDecorationKeymap() {
-  return import('@codemirror/view').then(({ keymap }) => {
-    return keymap.of([{
-      key: 'Backspace',
-      run: (view: EditorView) => {
-        if (rawMode) return false;
-        
-        const pos = view.state.selection.main.head;
-        
-        for (const deco of decorations) {
-          if (deco.class === 'B' && deco.handleBackspace) {
-            if (deco.handleBackspace(view, pos)) {
-              return true;
-            }
-          }
-        }
-        return false;
+export const decorationKeymap = keymap.of([{
+  key: 'Backspace',
+  run: (view: EditorView) => {
+    if (rawMode) return false;
+    const pos = view.state.selection.main.head;
+    for (const deco of decorations) {
+      if (deco.class === 'B' && deco.handleBackspace) {
+        if (deco.handleBackspace(view, pos)) return true;
       }
-    }]);
-  });
-}
+    }
+    return false;
+  }
+}]);
 
 let refreshFn: (() => void) | null = null;
 
@@ -258,7 +356,5 @@ export function setRefreshFn(fn: () => void) {
 }
 
 export function refreshDecorations() {
-  if (refreshFn) {
-    refreshFn();
-  }
+  if (refreshFn) refreshFn();
 }
