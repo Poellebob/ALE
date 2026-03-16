@@ -1,15 +1,3 @@
-// src/lib/latexDecorations.ts
-//
-// Provides CodeMirror ViewPlugin extensions that render rich widgets
-// in place of raw LaTeX syntax — inline/display KaTeX math and list
-// item markers — without modifying the underlying document.
-//
-// The rawMode flag disables all widgets so the user sees plain LaTeX.
-// Toggle it via toggleRawMode() and call refreshDecorations() to force
-// an immediate redraw.
-//
-// See docs/06-decorations.md for the full architecture.
-
 import {
   EditorView,
   Decoration,
@@ -19,10 +7,6 @@ import {
 } from '@codemirror/view';
 import { EditorState, RangeSetBuilder } from '@codemirror/state';
 import katex from 'katex';
-
-// ---------------------------------------------------------------------------
-// Raw mode toggle
-// ---------------------------------------------------------------------------
 
 let rawMode = false;
 
@@ -37,8 +21,6 @@ export function isRawMode(): boolean {
   return rawMode;
 }
 
-// A callback registered by the Editor component so we can force a redraw
-// when raw mode is toggled from outside.
 let _refresh: (() => void) | null = null;
 export function setRefreshFn(fn: () => void): void {
   _refresh = fn;
@@ -47,11 +29,6 @@ export function refreshDecorations(): void {
   _refresh?.();
 }
 
-// ---------------------------------------------------------------------------
-// Widget base
-// ---------------------------------------------------------------------------
-
-/** Shared base for all decoration widgets. */
 abstract class LatexWidget extends WidgetType {
   abstract renderDOM(): HTMLElement;
 
@@ -59,15 +36,11 @@ abstract class LatexWidget extends WidgetType {
     return this.renderDOM();
   }
 
-  // Prevent CodeMirror from reusing a stale widget when content changes
   eq(other: LatexWidget): boolean {
     return this.renderDOM().textContent === other.renderDOM().textContent;
   }
 }
 
-// ---------------------------------------------------------------------------
-// Math widgets
-// ---------------------------------------------------------------------------
 
 class InlineMathWidget extends LatexWidget {
   constructor(private readonly tex: string) {
@@ -121,9 +94,11 @@ class DisplayMathWidget extends LatexWidget {
   }
 }
 
-// ---------------------------------------------------------------------------
-// List marker widgets
-// ---------------------------------------------------------------------------
+class HideWidget extends LatexWidget {
+  renderDOM(): HTMLElement {
+    const span = document.createElement('span');
+  }
+}
 
 class BulletWidget extends LatexWidget {
   renderDOM(): HTMLElement {

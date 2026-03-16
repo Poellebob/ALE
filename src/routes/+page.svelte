@@ -1,15 +1,3 @@
-<!--
-  src/routes/+page.svelte
-
-  Application root. Coordinates:
-    - File operations (new / open / save / save-as) via Tauri invoke + dialog
-    - Build trigger and log streaming via build-log Tauri events
-    - Global keyboard shortcut handling
-    - Theme and raw-mode toggles
-    - Layout: TabBar → split panes (Editor | PdfViewer) → LogPanel → StatusBar
-
-  See docs/03-page.md for the full wiring diagram.
--->
 <script lang="ts">
   import { Splitpanes, Pane } from 'svelte-splitpanes';
   import { invoke } from '@tauri-apps/api/core';
@@ -24,14 +12,11 @@
   import { snippets } from '$lib/snippets';
   import { toggleRawMode, isRawMode, refreshDecorations } from '$lib/latexDecorations';
 
-  // ── Component refs ─────────────────────────────────────────────────
   let editorRef: Editor;
 
-  // ── Local reactive state ───────────────────────────────────────────
   let showLog  = $state(false);
   let rawMode  = $state(false);
 
-  // Mirror store values to $state so Svelte 5 templates can react to them
   let fileState  = $state({ path: null as string | null, content: '', dirty: false });
   let buildState = $state({
     status: 'idle' as string,
@@ -41,19 +26,15 @@
   });
   let currentTheme = $state('light');
 
-  // ── Cursor position for StatusBar ─────────────────────────────────
   let cursorLine = $state(1);
   let cursorCol  = $state(1);
 
-  // ── Store subscriptions ────────────────────────────────────────────
   const unsubFile  = fileStore.subscribe((s) => { fileState = s; });
   const unsubBuild = buildStore.subscribe((s) => { buildState = s; });
   const unsubTheme = themeStore.subscribe((t) => { currentTheme = t; });
 
-  // ── Tauri event listener cleanup ───────────────────────────────────
   let unlistenBuildLog: (() => void) | null = null;
 
-  // ─────────────────────────────────────────────────────────────────
   onMount(async () => {
     // Stream build log lines into the store
     unlistenBuildLog = await listen<{ line: string; stream: string }>(
@@ -77,9 +58,6 @@
     window.removeEventListener('keydown', handleGlobalKeydown);
   });
 
-  // ─────────────────────────────────────────────────────────────────
-  // Global keyboard shortcuts
-  // ─────────────────────────────────────────────────────────────────
   function handleGlobalKeydown(e: KeyboardEvent) {
     const mod = e.ctrlKey || e.metaKey;
     if (!mod) return;
@@ -99,9 +77,6 @@
     }
   }
 
-  // ─────────────────────────────────────────────────────────────────
-  // File operations
-  // ─────────────────────────────────────────────────────────────────
   function handleNew() {
     fileStore.reset();
   }
@@ -134,29 +109,18 @@
     fileStore.setPath(selected);
   }
 
-  // ─────────────────────────────────────────────────────────────────
-  // Build
-  // ─────────────────────────────────────────────────────────────────
   async function handleBuild() {
-    // Auto-save before building if unsaved
     if (fileState.dirty || !fileState.path) {
       await handleSave();
-      if (!fileState.path) return; // user cancelled the save dialog
-    }
+      if (!fileState.path) return;    }
     await buildStore.triggerBuild();
-    if (!showLog) showLog = true; // open log panel on first build
+    if (!showLog) showLog = true;
   }
 
-  // ─────────────────────────────────────────────────────────────────
-  // Editor content change → fileStore
-  // ─────────────────────────────────────────────────────────────────
   function handleContentChange(content: string) {
     fileStore.setContent(content);
   }
 
-  // ─────────────────────────────────────────────────────────────────
-  // Insert menu actions
-  // ─────────────────────────────────────────────────────────────────
   function handleInsert(trigger: string) {
     const snippet = snippets.find((s) => s.trigger === trigger);
     if (!snippet || !editorRef) return;
@@ -168,9 +132,6 @@
     editorRef.insertText(text);
   }
 
-  // ─────────────────────────────────────────────────────────────────
-  // Raw mode + theme toggles
-  // ─────────────────────────────────────────────────────────────────
   function handleToggleRawMode() {
     rawMode = toggleRawMode();
     refreshDecorations();
@@ -180,10 +141,6 @@
     themeStore.toggle();
   }
 
-  // ─────────────────────────────────────────────────────────────────
-  // Reactive tab definitions
-  // (using $derived so build status label stays in sync)
-  // ─────────────────────────────────────────────────────────────────
   const tabs: Tab[] = $derived([
     {
       id: 'file',
@@ -251,7 +208,6 @@
 </script>
 
 <div class="app">
-  <!-- ── Menu / title bar ───────────────────────────────────────────── -->
   <TabBar
     {tabs}
     fileState={{ path: fileState.path, dirty: fileState.dirty }}
@@ -262,10 +218,8 @@
     onToggleTheme={handleToggleTheme}
   />
 
-  <!-- ── Main content area ──────────────────────────────────────────── -->
   <div class="workspace">
     <Splitpanes horizontal={showLog} class="main-split">
-      <!-- Top pane: editor + pdf -->
       <Pane size={showLog ? 68 : 100} minSize={30}>
         <Splitpanes class="editor-split">
           <Pane size={50} minSize={20}>
@@ -281,7 +235,6 @@
         </Splitpanes>
       </Pane>
 
-      <!-- Bottom pane: build log (conditional) -->
       {#if showLog}
         <Pane size={32} minSize={10}>
           <LogPanel
