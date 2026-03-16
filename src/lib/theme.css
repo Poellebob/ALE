@@ -55,7 +55,7 @@
   --editor-gutter-text:   #a1a1aa;
   --editor-active-line:   #f0f7ff;
   --editor-active-gutter: #dbeafe;
-  --editor-selection:     #c8e0ff;
+  --editor-selection:     #9bbbd4;
   --editor-cursor:        #18181b;
 
   /* LaTeX syntax tokens */
@@ -165,7 +165,7 @@
   --editor-gutter-text:   #52525b;
   --editor-active-line:   #1e2030;
   --editor-active-gutter: #1a2035;
-  --editor-selection:     #264f78;
+  --editor-selection:     #1a3a5c;
   --editor-cursor:        #f4f4f5;
 
   --syntax-keyword:   #c084fc;

@@ -4,6 +4,7 @@ node_modules
 /build
 /.svelte-kit
 /package
+/.vscode
 .direnv/
 .direnv/**
 .env

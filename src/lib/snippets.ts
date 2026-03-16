@@ -69,7 +69,7 @@ export const snippets: Snippet[] = [
   // --- Math ---
   {
     trigger: '$$',
-    expansion: '$$\n$1\n$$\n$0',
+    expansion: '\\[\n$1\n\\]\n$0',
     description: 'Display math',
   },
   {

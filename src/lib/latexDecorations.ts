@@ -3,6 +3,7 @@ import {
   Decoration,
   WidgetType,
   ViewPlugin,
+  type ViewUpdate,
   type DecorationSet,
 } from '@codemirror/view';
 import { EditorState, RangeSetBuilder } from '@codemirror/state';
@@ -97,6 +98,7 @@ class DisplayMathWidget extends LatexWidget {
 class HideWidget extends LatexWidget {
   renderDOM(): HTMLElement {
     const span = document.createElement('span');
+    return span;
   }
 }
 
@@ -126,21 +128,11 @@ class EnumerateWidget extends LatexWidget {
   }
 }
 
-function isCursorInRange(
-  state: EditorState,
-  from: number,
-  to: number
-): boolean {
-  for (const range of state.selection.ranges) {
-    if (range.head >= from && range.head <= to) return true;
-    if (range.anchor >= from && range.anchor <= to) return true;
-  }
-  return false;
-}
-
 function itemNumber(text: string, index: number): number {
   const before = text.slice(0, index);
-  return (before.match(/\\item\b/g) ?? []).length + 1;
+  const lastBeginEnumerate = before.lastIndexOf('\\begin{enumerate}');
+  const afterBegin = text.slice(lastBeginEnumerate, index);
+  return (afterBegin.match(/\\item\b/g) ?? []).length + 1;
 }
 
 function insideEnumerate(text: string, index: number): boolean {
@@ -149,10 +141,6 @@ function insideEnumerate(text: string, index: number): boolean {
   const lastBeginEnumerate = before.lastIndexOf('\\begin{enumerate}');
   return lastBeginEnumerate > lastBeginItemize;
 }
-
-// ---------------------------------------------------------------------------
-// ViewPlugin
-// ---------------------------------------------------------------------------
 
 export function createDecorationPlugin() {
   return ViewPlugin.fromClass(
@@ -163,7 +151,7 @@ export function createDecorationPlugin() {
         this.decorations = this.build(view);
       }
 
-      update(update: { docChanged: boolean; viewportChanged: boolean; view: EditorView }) {
+      update(update: ViewUpdate) {
         if (update.docChanged || update.viewportChanged) {
           this.decorations = this.build(update.view);
         }
@@ -175,48 +163,37 @@ export function createDecorationPlugin() {
         const builder = new RangeSetBuilder<Decoration>();
         const doc = view.state.doc.toString();
 
-        // --- Display math ($$...$$)  — must be matched BEFORE inline math ---
         const displayMathRe = /\$\$([\s\S]+?)\$\$/g;
         for (const match of doc.matchAll(displayMathRe)) {
           const from = match.index!;
           const to = from + match[0].length;
-          if (!isCursorInRange(view.state, from, to)) {
-            builder.add(
-              from,
-              to,
-              Decoration.replace({ widget: new DisplayMathWidget(match[1]) })
-            );
-          }
+          builder.add(
+            from,
+            to,
+            Decoration.replace({ widget: new DisplayMathWidget(match[1]) })
+          );
         }
 
-        // --- Inline math ($...$) ---
-        // Negative lookbehind so we skip $$
         const inlineMathRe = /(?<!\$)\$(?!\$)([^\n$]+?)(?<!\$)\$(?!\$)/g;
         for (const match of doc.matchAll(inlineMathRe)) {
           const from = match.index!;
           const to = from + match[0].length;
-          if (!isCursorInRange(view.state, from, to)) {
-            builder.add(
-              from,
-              to,
-              Decoration.replace({ widget: new InlineMathWidget(match[1]) })
-            );
-          }
+          builder.add(
+            from,
+            to,
+            Decoration.replace({ widget: new InlineMathWidget(match[1]) })
+          );
         }
 
-        // --- \item markers ---
         const itemRe = /\\item(?:\s)/g;
         for (const match of doc.matchAll(itemRe)) {
           const from = match.index!;
           const to = from + match[0].length;
-          if (!isCursorInRange(view.state, from, to)) {
-            const widget = insideEnumerate(doc, from)
-              ? new EnumerateWidget(itemNumber(doc, from))
-              : new BulletWidget();
-            builder.add(from, to, Decoration.replace({ widget }));
-          }
+          const widget = insideEnumerate(doc, from)
+            ? new EnumerateWidget(itemNumber(doc, from))
+            : new BulletWidget();
+          builder.add(from, to, Decoration.replace({ widget }));
         }
-
         return builder.finish();
       }
     },

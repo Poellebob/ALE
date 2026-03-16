@@ -36,7 +36,13 @@
 
 /* --- Active line --- */
 .cm-activeLine {
-  background: var(--editor-active-line) !important;
+  background: transparent !important;
+  border-left: 2px solid var(--accent);
+}
+
+/* Show selection on active line */
+.cm-activeLine .cm-selectionBackground {
+  background: var(--editor-selection) !important;
 }
 
 /* --- Gutter --- */
